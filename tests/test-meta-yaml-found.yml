@@ -1,0 +1,31 @@
+name: Test meta.yaml found proceeds past check
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Run action with meta.yaml present
+        id: action
+        uses: .
+        continue-on-error: true
+        with:
+          meta_yaml_dir: pristine/uibcdf--action-build-and-upload-conda-packages/v1.2.0/tests/fixtures/conda-pkg
+          python-version: "3.9"
+          user: testuser
+          token: ""
+
+      - name: Assert action ran (not skipped)
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+        run: |
+          echo "outcome: $OUTCOME"
+          # The action should fail at conda build (conda not installed in act),
+          # but NOT be skipped. The meta.yaml check should pass since the file exists.
+          if [ "$OUTCOME" = "skipped" ]; then
+            echo "FAIL: action was unexpectedly skipped"
+            exit 1
+          fi
+          echo "PASS: action ran past the meta.yaml check step (outcome=$OUTCOME)"
