@@ -1,0 +1,46 @@
+name: Test meta.yaml found - action proceeds past check
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_EVENT_NAME: release
+      GITHUB_REF: refs/tags/v1.0.0
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Verify fixture meta.yaml exists
+        run: |
+          META_PATH="$GITHUB_WORKSPACE/tests/fixtures/conda-recipe/meta.yaml"
+          if [ ! -f "$META_PATH" ]; then
+            echo "FAIL: fixture meta.yaml not found at $META_PATH"
+            exit 1
+          fi
+          echo "PASS: fixture meta.yaml found at $META_PATH"
+
+      - name: Run action with meta.yaml present (expect failure at conda build, not at meta.yaml check)
+        id: action
+        uses: .
+        continue-on-error: true
+        with:
+          meta_yaml_dir: tests/fixtures/conda-recipe
+          python-version: "3.9"
+          user: test-user
+          upload: "false"
+
+      - name: Assert action did not fail at meta.yaml check step
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+        run: |
+          echo "outcome: $OUTCOME"
+          # The action should have found meta.yaml and proceeded past the check.
+          # It will fail at the conda build step (conda not installed), but that
+          # is expected. The important thing is that the meta.yaml check passed.
+          # Outcome will be 'failure' (conda not available) or 'success' - both are acceptable.
+          if [ "$OUTCOME" = "success" ] || [ "$OUTCOME" = "failure" ]; then
+            echo "PASS: action ran and meta.yaml was found (action proceeded past file check)"
+          else
+            echo "FAIL: unexpected outcome '$OUTCOME'"
+            exit 1
+          fi

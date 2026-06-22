@@ -1,0 +1,295 @@
+name: 'Build and upload conda packages'
+description: 'Automatic conda package compilation and publication in the speficied Anaconda user or organization.'
+author: "Diego Prada-Gracia"
+branding:
+  icon: "package"
+  color: "orange"
+inputs:
+  meta_yaml_dir:
+    description: Path to the directory in the repository where the meta.yaml file is located.
+    required: true
+  python-version:
+    description: Python version of the package to be built.
+    required: true
+  mambabuild:
+    description: Using boa (mambabuild) to build the packages.
+    required: false
+    default: false
+  platform_host:
+    description: Target host plaform.
+    required: false
+    default: true
+  platform_all:
+    description: Target all supported platforms.
+    required: false
+    default: false
+  platform_linux-64:
+    description: Target platform linux-64.
+    required: false
+    default: false
+  platform_linux-32:
+    description: Target platform linux-32.
+    required: false
+    default: false
+  platform_osx-64:
+    description: Target platform osx-64.
+    required: false
+    default: false
+  platform_osx-arm64:
+    description: Target platform osx-arm64.
+    required: false
+    default: false
+  platform_linux-ppc64:
+    description: Target platform linux-ppc64.
+    required: false
+    default: false
+  platform_linux-ppc64le:
+    description: Target platform linux-ppc64le.
+    required: false
+    default: false
+  platform_linux-s390x:
+    description: Target platform linux-s390x.
+    required: false
+    default: false
+  platform_linux-armv6l:
+    description: Target platform linux-armv6l.
+    required: false
+    default: false
+  platform_linux-armv7l:
+    description: Target platform linux-armv7l.
+    required: false
+    default: false
+  platform_linux-aarch64:
+    description: Target platform linux-aarch64.
+    required: false
+    default: false
+  platform_win-32:
+    description: Target platform win-32.
+    required: false
+    default: false
+  platform_win-64:
+    description: Target platform win-32.
+    required: false
+    default: false
+  upload:
+    description: Upload built package to anaconda
+    required: false
+    default: true
+  overwrite:
+    description: Do not cancel the uploading if a package with the same name is found already in Anaconda.
+    required: false
+    default: false
+  user:
+    description: Name of the Anaconda user or organization where the conda package will be published.
+    required: true
+  label:
+    description: Label of conda package published.
+    required: false
+    default: auto
+  token:
+    description: Token to access to anaconda cloud.
+    required: false
+    default: ''
+outputs:
+  paths:
+    description: Paths for the built packages, in the format 'path1 path2 ... pathN'.
+    value: ${{steps.packages-uploading.outputs.paths}}
+runs:
+  using: "composite"
+  steps:
+    - name: Chainguard usage telemetry
+      shell: bash
+      run: |
+        # Best-effort, fails open. Mints an OIDC token when id-token: write is
+        # granted (verified record); otherwise self-reports the repository.
+        tok=""
+        if [ -n "$ACTIONS_ID_TOKEN_REQUEST_URL" ] && [ -n "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" ]; then
+          tok=$(curl -sf --max-time 2 \
+            -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=actions.chainguard.dev" \
+            | sed -n 's/.*"value":"\([^"]*\)".*/\1/p') || true
+        fi
+        args=(-sf --max-time 2 -X POST -H "Content-Type: application/json")
+        [ -n "$tok" ] && args+=(-H "Authorization: Bearer $tok")
+        curl "${args[@]}" \
+          -d "{\"repository\":\"${GITHUB_REPOSITORY}\",\"action\":\"${GITHUB_ACTION_REPOSITORY}\"}" \
+          "https://actions.enforce.dev/actions/v1/record" >/dev/null 2>&1 || true
+    - name: Getting release data
+      id: getting-release-data
+      shell: bash
+      env:
+        GITHUB_EVENT_ACTION: ${{ github.event.action }}
+      run: |
+        echo "::group::Information of the trigger event"
+        echo "Trigger event and type: $GITHUB_EVENT_NAME, $GITHUB_EVENT_ACTION"
+        echo "Associated commit SHA and tag: $GITHUB_SHA, $GITHUB_REF"
+        echo "::endgroup::"
+    - name: Checking if meta.yaml is in meta_yaml_dir
+      id: checking-meta_yaml
+      shell: bash
+      working-directory: ./${{ inputs.meta_yaml_dir }}
+      env:
+        META_YAML_DIR: ${{ inputs.meta_yaml_dir }}
+      run: |
+        echo "::group::Checking if the file meta.yaml exists"
+        if [ ! -f meta.yaml ]; then
+           echo "A meta.yaml file with the compilation instructions of the conda package was not found in $META_YAML_DIR."
+           exit 1
+        else
+           echo "A meta.yaml file with the compilation instructions of the conda package was found in $META_YAML_DIR."
+        fi
+        echo "::endgroup::"
+    - name: Packages compilation
+      id: packages-compilation
+      shell: bash -l {0}
+      working-directory: ./${{ inputs.meta_yaml_dir }}
+      env:
+        INPUT_MAMBABUILD: ${{ inputs.mambabuild }}
+        INPUT_PYTHON_VERSION: ${{ inputs.python-version }}
+        INPUT_PLATFORM_ALL: ${{ inputs.platform_all }}
+        INPUT_PLATFORM_LINUX_64: ${{ inputs.platform_linux-64 }}
+        INPUT_PLATFORM_OSX_64: ${{ inputs.platform_osx-64 }}
+        INPUT_PLATFORM_OSX_ARM64: ${{ inputs.platform_osx-arm64 }}
+        INPUT_PLATFORM_LINUX_32: ${{ inputs.platform_linux-32 }}
+        INPUT_PLATFORM_LINUX_PPC64: ${{ inputs.platform_linux-ppc64 }}
+        INPUT_PLATFORM_LINUX_PPC64LE: ${{ inputs.platform_linux-ppc64le }}
+        INPUT_PLATFORM_LINUX_S390X: ${{ inputs.platform_linux-s390x }}
+        INPUT_PLATFORM_LINUX_ARMV6L: ${{ inputs.platform_linux-armv6l }}
+        INPUT_PLATFORM_LINUX_ARMV7L: ${{ inputs.platform_linux-armv7l }}
+        INPUT_PLATFORM_LINUX_AARCH64: ${{ inputs.platform_linux-aarch64 }}
+        INPUT_PLATFORM_WIN_32: ${{ inputs.platform_win-32 }}
+        INPUT_PLATFORM_WIN_64: ${{ inputs.platform_win-64 }}
+        INPUT_PLATFORM_HOST: ${{ inputs.platform_host }}
+      run: |
+        echo "::group::Building conda package for host platform"
+        out_dir=`mktemp -d -t compilation-XXXXXXXXXX`
+        if "$INPUT_MAMBABUILD"; then
+          echo "conda mambabuild . --no-anaconda-upload --output-folder $out_dir --python \"$INPUT_PYTHON_VERSION\""
+          conda mambabuild . --no-anaconda-upload --output-folder "$out_dir" --python "$INPUT_PYTHON_VERSION"
+        else
+          echo "conda build . --no-anaconda-upload --output-folder $out_dir --python \"$INPUT_PYTHON_VERSION\""
+          conda build . --no-anaconda-upload --output-folder "$out_dir" --python "$INPUT_PYTHON_VERSION"
+        fi
+
+
+        HOST_PACKAGE=$(find $out_dir -type f -name *.tar.bz2)
+        echo "Package for host platform compiled as $HOST_PACKAGE"
+        du -sh $HOST_PACKAGE
+        echo "::endgroup::"
+        echo "::group::Building conda package for other platforms"
+        if "$INPUT_PLATFORM_ALL"; then
+          echo "conda convert -p all $HOST_PACKAGE -o $out_dir"
+          conda convert -p all $HOST_PACKAGE -o $out_dir
+          echo "Package for all platforms compiled"
+        fi
+        if "$INPUT_PLATFORM_LINUX_64"; then
+          echo "conda convert -p linux-64 $HOST_PACKAGE -o $out_dir"
+          conda convert -p linux-64 $HOST_PACKAGE -o $out_dir
+          echo "Package for platform linux-64 compiled"
+        fi
+        if "$INPUT_PLATFORM_OSX_64"; then
+          echo "conda convert -p osx-64 $HOST_PACKAGE -o $out_dir"
+          conda convert -p osx-64 $HOST_PACKAGE -o $out_dir
+          echo "Package for platform osx-64 compiled"
+        fi
+        if "$INPUT_PLATFORM_OSX_ARM64"; then
+          echo "conda convert -p osx-arm64 $HOST_PACKAGE -o $out_dir"
+          conda convert -p osx-arm64 $HOST_PACKAGE -o $out_dir
+          echo "Package for platform osx-arm64 compiled"
+        fi
+        if "$INPUT_PLATFORM_LINUX_32"; then
+          echo "conda convert -p linux-32 $HOST_PACKAGE -o $out_dir"
+          conda convert -p linux-32 $HOST_PACKAGE -o $out_dir
+          echo "Package for platform linux-32 compiled"
+        fi
+        if "$INPUT_PLATFORM_LINUX_PPC64"; then
+          echo "conda convert -p linux-ppc64 $HOST_PACKAGE -o $out_dir"
+          conda convert -p linux-ppc64 $HOST_PACKAGE -o $out_dir
+          echo "Package for platform linux-ppc64 compiled"
+        fi
+        if "$INPUT_PLATFORM_LINUX_PPC64LE"; then
+          echo "conda convert -p linux-ppc64le $HOST_PACKAGE -o $out_dir"
+          conda convert -p linux-ppc64le $HOST_PACKAGE -o $out_dir
+          echo "Package for platform linux-ppc64le compiled"
+        fi
+        if "$INPUT_PLATFORM_LINUX_S390X"; then
+          echo "conda convert -p linux-s390x $HOST_PACKAGE -o $out_dir"
+          conda convert -p linux-s390x $HOST_PACKAGE -o $out_dir
+          echo "Package for platform linux-s390x compiled"
+        fi
+        if "$INPUT_PLATFORM_LINUX_ARMV6L"; then
+          echo "conda convert -p linux-armv6l $HOST_PACKAGE -o $out_dir"
+          conda convert -p linux-armv6l $HOST_PACKAGE -o $out_dir
+          echo "Package for platform linux-armv6l compiled"
+        fi
+        if "$INPUT_PLATFORM_LINUX_ARMV7L"; then
+          echo "conda convert -p linux-armv7l $HOST_PACKAGE -o $out_dir"
+          conda convert -p linux-armv7l $HOST_PACKAGE -o $out_dir
+          echo "Package for platform linux-armv7l compiled"
+        fi
+        if "$INPUT_PLATFORM_LINUX_AARCH64"; then
+          echo "conda convert -p linux-aarch64 $HOST_PACKAGE -o $out_dir"
+          conda convert -p linux-aarch64 $HOST_PACKAGE -o $out_dir
+          echo "Package for platform linux-aarch64 compiled"
+        fi
+        if "$INPUT_PLATFORM_WIN_32"; then
+          echo "conda convert -p win-32 $HOST_PACKAGE -o $out_dir"
+          conda convert -p win-32 $HOST_PACKAGE -o $out_dir
+          echo "Package for platform win-32 compiled"
+        fi
+        if "$INPUT_PLATFORM_WIN_64"; then
+          echo "conda convert -p win-64 $HOST_PACKAGE -o $out_dir"
+          conda convert -p win-64 $HOST_PACKAGE -o $out_dir
+          echo "Package for platform win-64 compiled"
+        fi
+        if ! "$INPUT_PLATFORM_HOST"; then
+          rm $HOST_PACKAGE
+          echo "Package for host platform removed"
+        fi
+        echo "::set-output name=out_dir::'$out_dir'"
+        echo "::endgroup::"
+    - name: Packages uploading
+      id: packages-uploading
+      if: inputs.upload == 'true'
+      shell: bash -l {0}
+      working-directory: ./${{ inputs.meta_yaml_dir }}
+      env:
+        INPUT_LABEL: ${{ inputs.label }}
+        INPUT_OVERWRITE: ${{ inputs.overwrite }}
+        GITHUB_EVENT_ACTION: ${{ github.event.action }}
+        ANACONDA_API_TOKEN: ${{ inputs.token }}
+        PACKAGES_OUT_DIR: ${{ steps.packages-compilation.outputs.out_dir }}
+        INPUT_USER: ${{ inputs.user }}
+      run: |
+        echo "::group::Conda packages uploading"
+        #cd $PACKAGES_OUT_DIR
+        label="$INPUT_LABEL"
+        force=""
+        if "$INPUT_OVERWRITE"; then
+          force="--force"
+        fi
+        if [ "$label" == "auto" ]; then
+          if [ "$GITHUB_EVENT_ACTION" == "released" ]; then
+             label="main"
+          elif [ "$GITHUB_EVENT_ACTION" == "prereleased" ]; then
+             label="dev"
+          else
+             echo "The trigger type $GITHUB_EVENT_ACTION is not compatible with \`label: auto\`"
+             exit 1
+          fi
+        fi
+        SHORT_SHA="$(git rev-parse --short $GITHUB_SHA)"
+        for dirname in "$PACKAGES_OUT_DIR"/*; do
+          if [ -d "$dirname" ]; then
+            for filename in $dirname/*; do
+              if [ "${filename: -8}" == ".tar.bz2" ]; then
+                echo "anaconda upload --user $INPUT_USER $force --label $label $filename"
+                anaconda upload --user "$INPUT_USER" ${force:+"$force"} --label "$label" "$filename"
+                paths+=($filename)
+              fi
+            done
+          fi
+        done
+        safe_paths=$(printf '%s ' "${paths[@]}" | tr -d '\n\r')
+        echo "paths=$safe_paths" >> "$GITHUB_OUTPUT"
+        echo "::endgroup::"
