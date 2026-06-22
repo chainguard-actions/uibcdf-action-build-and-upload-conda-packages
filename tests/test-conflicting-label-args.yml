@@ -1,0 +1,35 @@
+name: Test conflicting label input and anaconda_upload_args
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Create meta.yaml directory and file
+        run: |
+          mkdir -p /tmp/test-pkg
+          cat > /tmp/test-pkg/meta.yaml << 'EOF'
+          package:
+            name: test-pkg
+            version: 0.1.0
+          EOF
+      - name: Run action expecting failure (label specified in both input and anaconda_upload_args)
+        id: action
+        uses: .
+        continue-on-error: true
+        with:
+          meta_yaml_dir: /tmp/test-pkg
+          upload: 'true'
+          token: 'fake-token-abc123'
+          user: 'someuser'
+          label: 'main'
+          anaconda_upload_args: '--label dev'
+      - name: Assert action failed
+        run: |
+          echo "outcome: ${{ steps.action.outcome }}"
+          if [ "${{ steps.action.outcome }}" != "failure" ]; then
+            echo "FAIL: expected action to fail when label is specified in both 'label' input and 'anaconda_upload_args'"
+            exit 1
+          fi
+          echo "PASS: action correctly rejected conflicting label specifications"
