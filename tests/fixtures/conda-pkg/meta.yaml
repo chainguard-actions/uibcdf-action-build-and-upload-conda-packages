@@ -1,0 +1,21 @@
+package:
+  name: testpkg
+  version: "0.1.0"
+
+source:
+  path: .
+
+build:
+  number: 0
+  script: echo "build"
+
+requirements:
+  host:
+    - python
+  run:
+    - python
+
+about:
+  home: https://example.com
+  license: MIT
+  summary: A test package
