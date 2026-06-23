@@ -1,0 +1,40 @@
+name: Test event context logging on push
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_EVENT_NAME: push
+      GITHUB_REF: refs/heads/main
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - id: action
+        uses: .
+        continue-on-error: true
+        env:
+          GITHUB_EVENT_NAME: push
+          GITHUB_REF: refs/heads/main
+        with:
+          # meta_yaml_dir is relative to GITHUB_WORKSPACE (the action dir under act)
+          meta_yaml_dir: tests/fixtures/conda-pkg
+          python-version: "3.9"
+          user: test-user
+          upload: "false"
+
+      - name: Assert action ran (not skipped) with push event context
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+        run: |
+          echo "outcome: $OUTCOME"
+          # The action logs event context in step 1 (always succeeds),
+          # checks meta.yaml in step 2 (should succeed - fixture exists),
+          # then fails at conda build in step 3 (conda not installed).
+          # So outcome should be 'failure', not 'skipped'.
+          if [ "$OUTCOME" = "skipped" ]; then
+            echo "FAIL: action was unexpectedly skipped"
+            exit 1
+          fi
+          echo "PASS: action ran with push event context (outcome: $OUTCOME)"

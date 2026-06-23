@@ -1,0 +1,21 @@
+package:
+  name: test-package
+  version: 0.1.0
+
+source:
+  path: .
+
+build:
+  number: 0
+  script: echo "test build"
+
+requirements:
+  host:
+    - python
+  run:
+    - python
+
+about:
+  home: https://github.com/test/test-package
+  license: MIT
+  summary: A test package for CI testing
