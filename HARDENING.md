@@ -8,61 +8,43 @@
 
 **Test Policy SHA:** `843adf9e4b8f85d0c08b27b9d0b09dd094b54702`
 
-**Harden Agent Version:** `1`
+**Harden Agent Version:** `2`
 
-Action **uibcdf--action-build-and-upload-conda-packages/v1.5.0** was hardened automatically. 34 finding(s) were identified and resolved across 2 iteration(s).
+Action **uibcdf--action-build-and-upload-conda-packages/v1.5.0** was hardened automatically. 33 finding(s) were identified and resolved across 1 iteration(s).
 
 ## Findings Fixed
 
 ### script-injection (severity: high)
 
-Rule (a): Multiple ${{ ... }} expressions are directly interpolated inside run: shell command strings throughout action.yml. In the 'Create GitHub Release' step, ${{ github.ref_name }} is used directly in gh CLI arguments. In the 'Sanity checks on inputs' step, ${{ inputs.upload }}, ${{ inputs.token }}, ${{ inputs.user }}, ${{ inputs.conda_build_args }}, ${{ inputs.conda_convert_args }}, ${{ inputs.anaconda_upload_args }}, ${{ inputs.label }}, and ${{ inputs.overwrite }} are all interpolated directly into shell conditionals. In the 'Packages compilation' step, ${{ inputs.mambabuild }}, ${{ inputs.conda_build_args }}, ${{ inputs.conda_convert_args }}, and all platform inputs are interpolated directly into shell commands — including being embedded in a string passed to eval. In the 'Packages uploading' step, ${{ inputs.label }}, ${{ inputs.token }}, ${{ inputs.user }}, ${{ inputs.overwrite }}, and ${{ inputs.anaconda_upload_args }} are interpolated directly into shell commands, with the resulting string passed to eval. An attacker controlling any of these inputs can inject arbitrary shell commands.
+Multiple run: blocks in action.yml directly interpolate ${{ inputs.* }} and ${{ github.* }} expressions inside shell commands, enabling script injection. An attacker controlling these inputs can inject arbitrary shell commands.
+
+Step 'Create GitHub Release' (sub-rule a): github.ref_name is interpolated directly into gh release view and gh release create shell commands: `gh release view "${{ github.ref_name }}"`
+
+Step 'Sanity checks on inputs' (sub-rule a): inputs.upload, inputs.token, inputs.user, inputs.label, inputs.overwrite, inputs.conda_build_args, inputs.conda_convert_args, inputs.anaconda_upload_args are all interpolated directly into shell if-conditions and ${{ contains(...) }} expressions that expand into raw shell: `if [ "${{ inputs.upload }}" == "true" ]` and `if ${{ contains(inputs.conda_build_args, '--no-anaconda-upload') }}`
+
+Step 'Packages compilation' (sub-rule a): inputs.mambabuild, inputs.conda_build_args, inputs.conda_convert_args, and all inputs.platform_* values are interpolated directly into shell commands, including into a string passed to eval: `conda_build_command="conda $build_function . ... ${{ inputs.conda_build_args }}"` then `eval "$conda_build_command"`
+
+Step 'Packages uploading' (sub-rule a): inputs.label, inputs.overwrite, inputs.token, inputs.user, inputs.anaconda_upload_args, and steps.packages-compilation.outputs.* are all interpolated directly into shell commands, with the final command string passed to eval: `command="anaconda upload --user ${{ inputs.user }} ... ${{ inputs.anaconda_upload_args }} $package_path"` then `eval "$command"`
 
 Locations:
 
-- `action.yml:108`
-- `action.yml:109`
-- `action.yml:110`
-- `action.yml:111`
-- `action.yml:126`
-- `action.yml:128`
-- `action.yml:132`
-- `action.yml:155`
-- `action.yml:168`
-- `action.yml:176`
-- `action.yml:195`
-- `action.yml:213`
-- `action.yml:232`
-- `action.yml:248`
-- `action.yml:267`
-- `action.yml:280`
-- `action.yml:295`
-- `action.yml:310`
-- `action.yml:325`
-- `action.yml:340`
-- `action.yml:355`
-- `action.yml:370`
-- `action.yml:385`
-
-### suspicious-run-content (severity: high)
-
-eval-dynamic: The 'Packages compilation' step constructs a shell command string by embedding ${{ inputs.conda_build_args }} and ${{ inputs.conda_convert_args }} directly into variables, then executes them via eval: `eval "$conda_build_command"` and `eval "${conda_convert_command}${platforms_options}"`. The 'Packages uploading' step similarly builds a command string with ${{ inputs.user }}, ${{ inputs.anaconda_upload_args }}, and other user-controlled inputs, then executes it via `eval "$command"`. This allows an attacker to inject arbitrary shell commands through these inputs.
-
-Locations:
-
-- `action.yml:222`
-- `action.yml:223`
-- `action.yml:395`
-- `action.yml:396`
+- `action.yml:87`
+- `action.yml:100`
+- `action.yml:148`
+- `action.yml:196`
 
 ### github-env-injection (severity: high)
 
-Unsanitized values are written to $GITHUB_OUTPUT without applying the required `printf '%s' ... | tr -d '\n\r'` sanitization. (1) `HOST_PACKAGE` is derived from eval of a command built with ${{ inputs.conda_build_args }} and written as `echo "HOST_PACKAGE=$HOST_PACKAGE" >> $GITHUB_OUTPUT`. (2) `paths=${paths[@]}` is written to $GITHUB_OUTPUT where `package_paths` was found using `find` with a path derived from step outputs and ${{ inputs.anaconda_upload_args }} was embedded in the upload command. These unsanitized writes allow newline injection into the GitHub output context.
+Multiple run: blocks write values derived from untrusted inputs to $GITHUB_OUTPUT without the required sanitization step (printf '%s' ... | tr -d '\n\r').
+
+Step 'Packages compilation': HOST_PACKAGE is derived from eval "$conda_build_command --output" where conda_build_command contains ${{ inputs.conda_build_args }} (attacker-controlled). The result is written directly to $GITHUB_OUTPUT without sanitization: `echo "HOST_PACKAGE=$HOST_PACKAGE" >> $GITHUB_OUTPUT`
+
+Step 'Packages uploading': paths is built from package_paths which is derived from find with ${{ steps.packages-compilation.outputs.out_dir }} and ${{ steps.packages-compilation.outputs.HOST_PACKAGE }} — both steps.*.outputs.* values are untrusted. The result is written to $GITHUB_OUTPUT without sanitization: `echo "paths=${paths[@]}" >> $GITHUB_OUTPUT`
 
 Locations:
 
-- `action.yml:224`
-- `action.yml:399`
+- `action.yml:158`
+- `action.yml:209`
 
 ### static-inline-injection (severity: high)
 
@@ -316,21 +298,21 @@ Locations:
 
 ### Iteration 1
 
-**Fixes applied:** script-injection, suspicious-run-content, github-env-injection, static-inline-injection
+**Fixes applied:** script-injection, github-env-injection, static-inline-injection
 
 **Notes:**
 
-Fixed all security findings in action.yml: (1) Moved all ${{ inputs.* }} and ${{ github.ref_name }} expressions from run: blocks to env: maps in each step. (2) Replaced all eval-based command construction with bash array-based commands (build_cmd, convert_cmd, upload_cmd arrays) to eliminate eval injection. (3) Sanitized HOST_PACKAGE and paths values written to $GITHUB_OUTPUT using printf '%s' | tr -d '\n\r' to prevent newline injection. (4) The 'Create GitHub Release' step now uses $REF_NAME env var instead of ${{ github.ref_name }} inline. The 'Sanity checks on inputs' step uses env vars for all inputs and contains() results. The 'Checking if meta.yaml' step uses $INPUT_META_YAML_DIR. The 'Packages compilation' step uses env vars for all platform inputs and build args, with array-based command construction. The 'Packages uploading' step uses env vars for all upload inputs with array-based command construction.
+Fixed all security findings in hardened/action/action.yml:
 
-### Iteration 2
+1. Moved all ${{ inputs.* }} and ${{ github.* }} expressions from run: blocks into env: blocks for each step. References in shell scripts now use plain $VAR_NAME environment variables.
 
-**Fixes applied:** script-injection
+2. Replaced ${{ contains(inputs.*, '...') }} expressions (which expanded to literal 'true'/'false' in shell) with grep -qF string searches on the corresponding env vars.
 
-**Notes:**
+3. Eliminated all eval usage with user-controlled input. Commands are now built as bash arrays (conda_build_args_array, conda_convert_args_array, anaconda_upload_args_array, force_args, platforms_options) and expanded with "${array[@]}" to keep each token as a separate argument.
 
-Fixed two script-injection findings in action.yml:
+4. Sanitized all GITHUB_OUTPUT writes with printf '%s' "$VAR" | tr -d '\n\r' to prevent newline injection (out_dir, HOST_PACKAGE, paths).
 
-1. 'Sanity checks on inputs' step (line 175): Replaced all unquoted `if $CONTAINS_*` boolean env var expansions with properly quoted `[ "$CONTAINS_*" = "true" ]` comparisons. This applies to CONTAINS_NO_ANACONDA_UPLOAD, CONTAINS_OUTPUT_FOLDER_BUILD, CONTAINS_OUTPUT_FOLDER_CONVERT, CONTAINS_LABEL_LONG, CONTAINS_LABEL_SHORT, CONTAINS_USER_LONG, CONTAINS_USER_SHORT, CONTAINS_TOKEN, and CONTAINS_FORCE.
+5. Fixed boolean input checks: replaced if "${{ inputs.mambabuild }}" (treating string as command) with if [ "$INPUT_MAMBABUILD" = "true" ].
 
-2. 'Packages uploading' step (line 310): Replaced the unquoted `for package_path in $package_paths` loop (where $package_paths was a plain string from command substitution) with `mapfile -d '' package_paths < <(find "$OUT_DIR" -type f -name "$(basename "$HOST_PACKAGE")" -print0)` followed by `for package_path in "${package_paths[@]}"`. This safely handles filenames with spaces or special characters using null-delimited find output and a bash array.
+6. The github.ref_name expression in the Create GitHub Release step was moved to env: REF_NAME and referenced as $REF_NAME in the shell script.
 
