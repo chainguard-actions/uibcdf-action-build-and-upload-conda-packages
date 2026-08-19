@@ -121,14 +121,14 @@ runs:
       shell: bash
       working-directory: ./${{ inputs.meta_yaml_dir }}
       env:
-        INPUT_META_YAML_DIR: ${{ inputs.meta_yaml_dir }}
+        META_YAML_DIR: ${{ inputs.meta_yaml_dir }}
       run: |
         echo "::group::Checking if the file meta.yaml exists"
         if [ ! -f meta.yaml ]; then
-           echo "A meta.yaml file with the compilation instructions of the conda package was not found in $INPUT_META_YAML_DIR."
+           echo "A meta.yaml file with the compilation instructions of the conda package was not found in $META_YAML_DIR."
            exit 1
         else
-           echo "A meta.yaml file with the compilation instructions of the conda package was found in $INPUT_META_YAML_DIR."
+           echo "A meta.yaml file with the compilation instructions of the conda package was found in $META_YAML_DIR."
         fi
         echo "::endgroup::"
     - name: Packages compilation
@@ -156,11 +156,11 @@ runs:
         echo "::group::Building conda package for host platform"
         out_dir=`mktemp -d -t compilation-XXXXXXXXXX`
         if "$INPUT_MAMBABUILD"; then
-          echo "conda mambabuild . --no-anaconda-upload --output-folder $out_dir --python $INPUT_PYTHON_VERSION"
-          conda mambabuild . --no-anaconda-upload --output-folder "$out_dir" --python "$INPUT_PYTHON_VERSION"
+          echo "conda mambabuild . --no-anaconda-upload --output-folder $out_dir --python \"$INPUT_PYTHON_VERSION\""
+          conda mambabuild . --no-anaconda-upload --output-folder $out_dir --python "$INPUT_PYTHON_VERSION"
         else
-          echo "conda build . --no-anaconda-upload --output-folder $out_dir --python $INPUT_PYTHON_VERSION"
-          conda build . --no-anaconda-upload --output-folder "$out_dir" --python "$INPUT_PYTHON_VERSION"
+          echo "conda build . --no-anaconda-upload --output-folder $out_dir --python \"$INPUT_PYTHON_VERSION\""
+          conda build . --no-anaconda-upload --output-folder $out_dir --python "$INPUT_PYTHON_VERSION"
         fi
         for dirname in $out_dir/*; do
           if [ -d "$dirname" ]; then
@@ -257,4 +257,4 @@ runs:
         INPUT_USER: ${{ inputs.user }}
         GITHUB_EVENT_ACTION: ${{ github.event.action }}
         PACKAGES_OUT_DIR: ${{ steps.packages-compilation.outputs.out_dir }}
-      run: "echo \"::group::Conda packages uploading\"\nlabel=\"$INPUT_LABEL\"\nforce=\"\"\nif \"$INPUT_OVERWRITE\"; then\n  force=\"--force\"\nfi\nif [ \"$label\" == \"auto\" ]; then\n  if [ \"$GITHUB_EVENT_ACTION\" == \"released\" ]; then\n     label=\"main\"\n  elif [ \"$GITHUB_EVENT_ACTION\" == \"prereleased\" ]; then\n     label=\"dev\"\n  else\n     echo \"The trigger type $GITHUB_EVENT_ACTION is not compatible with \\`label: auto\\`\"\n     exit 1\n  fi\nfi\nexport ANACONDA_API_TOKEN=\"$INPUT_TOKEN\"\nSHORT_SHA=\"$(git rev-parse --short $GITHUB_SHA)\"\nfor dirname in \"$PACKAGES_OUT_DIR\"/*; do\n  if [ -d \"$dirname\" ]; then\n    for filename in $dirname/*; do\n      if [ \"${filename: -8}\" == \".tar.bz2\" ]; then\n        echo \"anaconda upload --user $INPUT_USER $force --label $label $filename\"\n        anaconda upload --user \"$INPUT_USER\" $force --label \"$label\" \"$filename\"\n      fi\n    done\n  fi\ndone \necho \"::endgroup::\"\n"
+      run: "echo \"::group::Conda packages uploading\"\nlabel=\"$INPUT_LABEL\"\nforce=\"\"\nif \"$INPUT_OVERWRITE\"; then\n  force=\"--force\"\nfi\nif [ \"$label\" == \"auto\" ]; then\n  if [ \"$GITHUB_EVENT_ACTION\" == \"released\" ]; then\n     label=\"main\"\n  elif [ \"$GITHUB_EVENT_ACTION\" == \"prereleased\" ]; then\n     label=\"dev\"\n  else\n     echo \"The trigger type $GITHUB_EVENT_ACTION is not compatible with \\`label: auto\\`\"\n     exit 1\n  fi\nfi\nexport ANACONDA_API_TOKEN=\"$INPUT_TOKEN\"\nSHORT_SHA=\"$(git rev-parse --short $GITHUB_SHA)\"\nfor dirname in \"$PACKAGES_OUT_DIR\"/*; do\n  if [ -d \"$dirname\" ]; then\n    for filename in \"$dirname\"/*; do\n      if [ \"${filename: -8}\" == \".tar.bz2\" ]; then\n        echo \"anaconda upload --user \\\"$INPUT_USER\\\" ${force:+\"$force\"} --label \\\"$label\\\" \\\"$filename\\\"\"\n        anaconda upload --user \"$INPUT_USER\" ${force:+\"$force\"} --label \"$label\" \"$filename\"\n      fi\n    done\n  fi\ndone \necho \"::endgroup::\"\n"

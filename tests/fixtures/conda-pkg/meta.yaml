@@ -1,5 +1,5 @@
 package:
-  name: test-package
+  name: testpkg
   version: 0.1.0
 
 source:
@@ -7,7 +7,7 @@ source:
 
 build:
   number: 0
-  script: echo "test"
+  script: echo "build"
 
 requirements:
   host:
@@ -18,4 +18,4 @@ requirements:
 about:
   home: https://example.com
   license: MIT
-  summary: Test package for CI
+  summary: Test package
