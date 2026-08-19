@@ -123,22 +123,21 @@ runs:
     - name: Checking if meta.yaml is in meta_yaml_dir
       id: checking-meta_yaml
       shell: bash
-      working-directory: ./${{ inputs.meta_yaml_dir }}
       env:
-        META_YAML_DIR: ${{ inputs.meta_yaml_dir }}
+        INPUT_META_YAML_DIR: ${{ inputs.meta_yaml_dir }}
+      working-directory: ./${{ inputs.meta_yaml_dir }}
       run: |
         echo "::group::Checking if the file meta.yaml exists"
         if [ ! -f meta.yaml ]; then
-           echo "A meta.yaml file with the compilation instructions of the conda package was not found in $META_YAML_DIR."
+           echo "A meta.yaml file with the compilation instructions of the conda package was not found in $INPUT_META_YAML_DIR."
            exit 1
         else
-           echo "A meta.yaml file with the compilation instructions of the conda package was found in $META_YAML_DIR."
+           echo "A meta.yaml file with the compilation instructions of the conda package was found in $INPUT_META_YAML_DIR."
         fi
         echo "::endgroup::"
     - name: Packages compilation
       id: packages-compilation
       shell: bash -l {0}
-      working-directory: ./${{ inputs.meta_yaml_dir }}
       env:
         INPUT_MAMBABUILD: ${{ inputs.mambabuild }}
         INPUT_PYTHON_VERSION: ${{ inputs.python-version }}
@@ -156,18 +155,17 @@ runs:
         INPUT_PLATFORM_WIN_32: ${{ inputs.platform_win-32 }}
         INPUT_PLATFORM_WIN_64: ${{ inputs.platform_win-64 }}
         INPUT_PLATFORM_HOST: ${{ inputs.platform_host }}
+      working-directory: ./${{ inputs.meta_yaml_dir }}
       run: |
         echo "::group::Building conda package for host platform"
         out_dir=`mktemp -d -t compilation-XXXXXXXXXX`
         if "$INPUT_MAMBABUILD"; then
-          printf 'conda mambabuild . --no-anaconda-upload --output-folder %s --python %s\n' "$out_dir" "$INPUT_PYTHON_VERSION"
+          echo "conda mambabuild . --no-anaconda-upload --output-folder $out_dir --python $INPUT_PYTHON_VERSION"
           conda mambabuild . --no-anaconda-upload --output-folder "$out_dir" --python "$INPUT_PYTHON_VERSION"
         else
-          printf 'conda build . --no-anaconda-upload --output-folder %s --python %s\n' "$out_dir" "$INPUT_PYTHON_VERSION"
+          echo "conda build . --no-anaconda-upload --output-folder $out_dir --python $INPUT_PYTHON_VERSION"
           conda build . --no-anaconda-upload --output-folder "$out_dir" --python "$INPUT_PYTHON_VERSION"
         fi
-
-
         for dirname in $out_dir/*; do
           if [ -d "$dirname" ]; then
             for filename in $dirname/*; do
@@ -256,7 +254,6 @@ runs:
       id: packages-uploading
       if: inputs.upload == 'true'
       shell: bash -l {0}
-      working-directory: ./${{ inputs.meta_yaml_dir }}
       env:
         INPUT_LABEL: ${{ inputs.label }}
         INPUT_OVERWRITE: ${{ inputs.overwrite }}
@@ -264,4 +261,5 @@ runs:
         INPUT_TOKEN: ${{ inputs.token }}
         PACKAGES_OUT_DIR: ${{ steps.packages-compilation.outputs.out_dir }}
         INPUT_USER: ${{ inputs.user }}
-      run: "echo \"::group::Conda packages uploading\"\n#cd $PACKAGES_OUT_DIR\nlabel=$INPUT_LABEL\nforce=\"\"\nif \"$INPUT_OVERWRITE\"; then\n  force=\"--force\"\nfi\nif [ \"$label\" == \"auto\" ]; then\n  if [ \"$GITHUB_EVENT_ACTION\" == \"released\" ]; then\n     label=\"main\"\n  elif [ \"$GITHUB_EVENT_ACTION\" == \"prereleased\" ]; then\n     label=\"dev\"\n  else\n     echo \"The trigger type $GITHUB_EVENT_ACTION is not compatible with \\`label: auto\\`\"\n     exit 1\n  fi\nfi\nexport ANACONDA_API_TOKEN=\"$INPUT_TOKEN\"\nSHORT_SHA=\"$(git rev-parse --short \"$GITHUB_SHA\")\"\nforce_args=()\nif [ -n \"$force\" ]; then\n  force_args=(\"$force\")\nfi\nfor dirname in \"$PACKAGES_OUT_DIR\"/*; do\n  if [ -d \"$dirname\" ]; then\n    for filename in \"$dirname\"/*; do\n      if [ \"${filename: -8}\" == \".tar.bz2\" ]; then\n        echo \"anaconda upload --user $INPUT_USER $force --label $label $filename\"\n        anaconda upload --user \"$INPUT_USER\" \"${force_args[@]}\" --label \"$label\" \"$filename\"\n      fi\n    done\n  fi\ndone \necho \"::endgroup::\"\n"
+      working-directory: ./${{ inputs.meta_yaml_dir }}
+      run: "echo \"::group::Conda packages uploading\"\n#cd $PACKAGES_OUT_DIR\nlabel=\"$INPUT_LABEL\"\nforce=\"\"\nif \"$INPUT_OVERWRITE\"; then\n  force=\"--force\"\nfi\nif [ \"$label\" == \"auto\" ]; then\n  if [ \"$GITHUB_EVENT_ACTION\" == \"released\" ]; then\n     label=\"main\"\n  elif [ \"$GITHUB_EVENT_ACTION\" == \"prereleased\" ]; then\n     label=\"dev\"\n  else\n     echo \"The trigger type $GITHUB_EVENT_ACTION is not compatible with \\`label: auto\\`\"\n     exit 1\n  fi\nfi\nexport ANACONDA_API_TOKEN=\"$INPUT_TOKEN\"\nSHORT_SHA=\"$(git rev-parse --short $GITHUB_SHA)\"\nfor dirname in \"$PACKAGES_OUT_DIR\"/*; do\n  if [ -d \"$dirname\" ]; then\n    for filename in \"$dirname\"/*; do\n      if [ \"${filename: -8}\" == \".tar.bz2\" ]; then\n        echo \"anaconda upload --user $INPUT_USER $force --label $label $filename\"\n        anaconda upload --user \"$INPUT_USER\" $force --label \"$label\" \"$filename\"\n      fi\n    done\n  fi\ndone \necho \"::endgroup::\"\n"

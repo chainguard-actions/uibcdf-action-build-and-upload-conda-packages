@@ -1,13 +1,13 @@
 package:
-  name: test-package
-  version: 0.1.0
+  name: testpkg
+  version: 0.0.1
 
 source:
   path: .
 
 build:
   number: 0
-  script: echo "test build"
+  script: echo "fake build"
 
 requirements:
   host:
@@ -16,6 +16,6 @@ requirements:
     - python
 
 about:
-  home: https://github.com/test/test-package
+  home: https://example.com
   license: MIT
-  summary: A test package for CI testing
+  summary: A test package
