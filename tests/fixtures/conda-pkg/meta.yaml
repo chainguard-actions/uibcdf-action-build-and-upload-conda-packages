@@ -1,0 +1,19 @@
+package:
+  name: hello-test-pkg
+  version: 0.0.1
+
+build:
+  number: 0
+  script: echo "hello"
+  noarch: generic
+
+requirements:
+  host:
+    - python
+  run:
+    - python
+
+about:
+  home: https://example.com
+  license: MIT
+  summary: Minimal test package for CI

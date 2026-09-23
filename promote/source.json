@@ -2,6 +2,7 @@
   "owner": "uibcdf",
   "repo": "action-build-and-upload-conda-packages",
   "version": "v2.2.0",
+  "path": "promote",
   "commit_sha": "cd05cd53ad45e5d055e102d1feacdc5f730e5e04",
   "url": "https://github.com/uibcdf/action-build-and-upload-conda-packages",
   "policy_sha": "d636be7e43ef829af6e853da6b3c7566db9f72fe",

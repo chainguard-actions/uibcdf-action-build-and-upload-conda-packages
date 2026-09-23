@@ -1,0 +1,16 @@
+package:
+  name: action-multiple-variants-fixture
+  version: "0.1.0"
+
+build:
+  number: 0
+
+requirements:
+  host:
+    - python
+  run:
+    - python
+
+test:
+  imports:
+    - action_multiple_variants_fixture

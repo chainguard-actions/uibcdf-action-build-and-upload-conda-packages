@@ -1,0 +1,72 @@
+name: Test producer evidence output after build
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install conda (miniconda)
+        run: |
+          set -euo pipefail
+          if ! command -v conda &>/dev/null; then
+            wget -q https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O /tmp/miniconda.sh
+            bash /tmp/miniconda.sh -b -p "$HOME/miniconda3"
+            echo "$HOME/miniconda3/bin" >> "$GITHUB_PATH"
+            "$HOME/miniconda3/bin/conda" init bash
+          else
+            echo "conda already available: $(conda --version)"
+          fi
+      - name: Install conda-build
+        run: |
+          set -euo pipefail
+          source "$HOME/miniconda3/etc/profile.d/conda.sh" 2>/dev/null || true
+          conda install -y conda-build
+      - id: action
+        uses: .
+        with:
+          meta_yaml_dir: tests/fixtures/conda-pkg
+          upload: 'false'
+          platform_host: 'true'
+      - name: Assert evidence_path output is set and file exists
+        env:
+          EVIDENCE_PATH: ${{ steps.action.outputs.evidence_path }}
+        run: |
+          echo "evidence_path: $EVIDENCE_PATH"
+          if [ -z "$EVIDENCE_PATH" ]; then
+            echo "FAIL: expected evidence_path to be non-empty after a successful build"
+            exit 1
+          fi
+          if [ ! -f "$EVIDENCE_PATH" ]; then
+            echo "FAIL: evidence file does not exist at: $EVIDENCE_PATH"
+            exit 1
+          fi
+          echo "PASS: evidence_path is set and file exists: $EVIDENCE_PATH"
+      - name: Assert evidence_artifact_name output is set
+        env:
+          ARTIFACT_NAME: ${{ steps.action.outputs.evidence_artifact_name }}
+        run: |
+          echo "evidence_artifact_name: $ARTIFACT_NAME"
+          if [ -z "$ARTIFACT_NAME" ]; then
+            echo "FAIL: expected evidence_artifact_name to be non-empty after a successful build"
+            exit 1
+          fi
+          echo "PASS: evidence_artifact_name is set: $ARTIFACT_NAME"
+      - name: Assert evidence file contains valid JSON with expected schema
+        env:
+          EVIDENCE_PATH: ${{ steps.action.outputs.evidence_path }}
+        run: |
+          echo "Validating evidence file content..."
+          schema=$(python3 -c "import json; d=json.load(open('$EVIDENCE_PATH')); print(d.get('schema',''))")
+          echo "schema: $schema"
+          if [ "$schema" != "gh-run-receptor.events@1" ]; then
+            echo "FAIL: expected schema 'gh-run-receptor.events@1', got '$schema'"
+            exit 1
+          fi
+          events_count=$(python3 -c "import json; d=json.load(open('$EVIDENCE_PATH')); print(len(d.get('events',[])))")
+          echo "events count: $events_count"
+          if [ "$events_count" -eq 0 ]; then
+            echo "FAIL: expected at least one event in evidence file"
+            exit 1
+          fi
+          echo "PASS: evidence file has valid schema and $events_count event(s)"
