@@ -13,6 +13,7 @@ Hardened by [Chainguard](https://www.chainguard.dev) from the upstream action at
 | v1.3.0 | [`v1.3.0`](https://github.com/chainguard-actions/uibcdf-action-build-and-upload-conda-packages/tree/v1.3.0) | [`d72a2d9`](https://github.com/uibcdf/action-build-and-upload-conda-packages/commit/d72a2d950af55243bbc385185dd68b824211192d) |
 | v1.4.0 | [`v1.4.0`](https://github.com/chainguard-actions/uibcdf-action-build-and-upload-conda-packages/tree/v1.4.0) | [`b061651`](https://github.com/uibcdf/action-build-and-upload-conda-packages/commit/b06165145a25b9c8bcb2d2b24682ad0d8e494ce7) |
 | v1.5.0 | [`v1.5.0`](https://github.com/chainguard-actions/uibcdf-action-build-and-upload-conda-packages/tree/v1.5.0) | [`aac1ccb`](https://github.com/uibcdf/action-build-and-upload-conda-packages/commit/aac1ccb14aa0d4d43a0b10c18b17c5285a746544) |
+| v2.2.0 | [`v2.2.0`](https://github.com/chainguard-actions/uibcdf-action-build-and-upload-conda-packages/tree/v2.2.0) | [`cd05cd5`](https://github.com/uibcdf/action-build-and-upload-conda-packages/commit/cd05cd53ad45e5d055e102d1feacdc5f730e5e04) |
 
 ## Privacy
 
