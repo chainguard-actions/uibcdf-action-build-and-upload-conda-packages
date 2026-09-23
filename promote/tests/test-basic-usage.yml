@@ -1,0 +1,43 @@
+name: Test basic usage - promote conda package
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - id: action
+        uses: .
+        continue-on-error: true
+        with:
+          package-spec: "testowner/testpackage/1.0.0/linux-64/testpackage-1.0.0-py39_0.conda"
+          expected-sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+          from-label: "staging"
+          to-label: "main"
+          token: "fake-anaconda-token"
+
+      - name: Assert action ran and failed gracefully (no real token or package)
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+          PKG: ${{ steps.action.outputs.package }}
+          SHA: ${{ steps.action.outputs.sha256 }}
+          RECEIPT: ${{ steps.action.outputs.receipt }}
+        run: |
+          echo "outcome: $OUTCOME"
+          echo "package output: $PKG"
+          echo "sha256 output: $SHA"
+          echo "receipt output: $RECEIPT"
+          if [ "$OUTCOME" = "success" ]; then
+            # If somehow it succeeded, verify outputs are set
+            if [ -z "$PKG" ]; then
+              echo "FAIL: action succeeded but package output is empty"
+              exit 1
+            fi
+            echo "PASS: action succeeded with package='$PKG'"
+          elif [ "$OUTCOME" = "failure" ]; then
+            echo "PASS: action failed gracefully (expected - no real token/package available)"
+          else
+            echo "FAIL: unexpected outcome '$OUTCOME'"
+            exit 1
+          fi

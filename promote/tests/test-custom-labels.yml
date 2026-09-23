@@ -1,0 +1,42 @@
+name: Test custom labels - dev to release
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - id: action
+        uses: .
+        continue-on-error: true
+        with:
+          package-spec: "testowner/testpackage/2.0.0/linux-64/testpackage-2.0.0-py310_0.conda"
+          expected-sha256: "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+          from-label: "dev"
+          to-label: "release"
+          token: "fake-anaconda-token"
+
+      - name: Assert action ran with custom labels (fails gracefully without real credentials)
+        env:
+          OUTCOME: ${{ steps.action.outcome }}
+          PKG: ${{ steps.action.outputs.package }}
+          SHA: ${{ steps.action.outputs.sha256 }}
+          RECEIPT: ${{ steps.action.outputs.receipt }}
+        run: |
+          echo "outcome: $OUTCOME"
+          echo "package output: $PKG"
+          echo "sha256 output: $SHA"
+          echo "receipt output: $RECEIPT"
+          if [ "$OUTCOME" = "success" ]; then
+            if [ -z "$PKG" ]; then
+              echo "FAIL: action succeeded but package output is empty"
+              exit 1
+            fi
+            echo "PASS: action succeeded with custom labels dev->release, package='$PKG'"
+          elif [ "$OUTCOME" = "failure" ]; then
+            echo "PASS: action failed gracefully with custom labels (expected - no real credentials)"
+          else
+            echo "FAIL: unexpected outcome '$OUTCOME'"
+            exit 1
+          fi

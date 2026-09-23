@@ -1,0 +1,65 @@
+name: 'Promote an exact conda package'
+description: 'Add a target Anaconda.org label to one digest-verified staged artifact.'
+author: 'UIBCDF Development Team'
+branding:
+  icon: 'package'
+  color: 'orange'
+inputs:
+  package-spec:
+    description: 'Exact owner/package/version/subdir/filename identity.'
+    required: true
+  expected-sha256:
+    description: 'Expected lowercase SHA-256 digest of the staged artifact.'
+    required: true
+  from-label:
+    description: 'Existing source label.'
+    required: false
+    default: 'staging'
+  to-label:
+    description: 'Target publication label.'
+    required: false
+    default: 'main'
+  token:
+    description: 'Anaconda.org token allowed to change labels.'
+    required: true
+outputs:
+  package:
+    description: 'Exact promoted package identity.'
+    value: ${{ steps.promote.outputs.package }}
+  sha256:
+    description: 'Verified package digest.'
+    value: ${{ steps.promote.outputs.sha256 }}
+  receipt:
+    description: 'Path to the bounded JSON promotion receipt.'
+    value: ${{ steps.promote.outputs.receipt }}
+runs:
+  using: 'composite'
+  steps:
+    - name: Chainguard usage telemetry
+      shell: bash
+      run: |
+        # Best-effort, fails open. Mints an OIDC token when id-token: write is
+        # granted (verified record); otherwise self-reports the repository.
+        tok=""
+        if [ -n "$ACTIONS_ID_TOKEN_REQUEST_URL" ] && [ -n "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" ]; then
+          tok=$(curl -sf --max-time 2 \
+            -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=actions.chainguard.dev" \
+            | sed -n 's/.*"value":"\([^"]*\)".*/\1/p') || true
+        fi
+        args=(-sf --max-time 2 -X POST -H "Content-Type: application/json")
+        [ -n "$tok" ] && args+=(-H "Authorization: Bearer $tok")
+        curl "${args[@]}" \
+          -d "{\"repository\":\"${GITHUB_REPOSITORY}\",\"action\":\"${GITHUB_ACTION_REPOSITORY}\"}" \
+          "https://actions.enforce.dev/actions/v1/record" >/dev/null 2>&1 || true
+    - name: Promote and verify the exact package
+      id: promote
+      shell: bash -l {0}
+      env:
+        ANACONDA_API_TOKEN: ${{ inputs.token }}
+        PACKAGE_SPEC: ${{ inputs.package-spec }}
+        EXPECTED_SHA256: ${{ inputs.expected-sha256 }}
+        FROM_LABEL: ${{ inputs.from-label }}
+        TO_LABEL: ${{ inputs.to-label }}
+      run: >-
+        python "$GITHUB_ACTION_PATH/../scripts/promote_conda_package.py" --package-spec "$PACKAGE_SPEC" --expected-sha256 "$EXPECTED_SHA256" --from-label "$FROM_LABEL" --to-label "$TO_LABEL" --output "$RUNNER_TEMP/conda-promotion-receipt.json"

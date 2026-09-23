@@ -1,0 +1,455 @@
+name: 'Build and upload conda packages'
+description: 'Automatic conda package compilation and publication in the speficied Anaconda user or organization.'
+author: "Diego Prada-Gracia"
+branding:
+  icon: "package"
+  color: "orange"
+inputs:
+  meta_yaml_dir:
+    description: Path to the directory in the repository where the meta.yaml file is located.
+    required: true
+  mambabuild:
+    description: Using boa (mambabuild) to build the packages.
+    required: false
+    default: false
+  platform_host:
+    description: Target host plaform.
+    required: false
+    default: true
+  platform_all:
+    description: Target all supported platforms.
+    required: false
+    default: false
+  platform_linux-64:
+    description: Target platform linux-64.
+    required: false
+    default: false
+  platform_linux-32:
+    description: Target platform linux-32.
+    required: false
+    default: false
+  platform_osx-64:
+    description: Target platform osx-64.
+    required: false
+    default: false
+  platform_osx-arm64:
+    description: Target platform osx-arm64.
+    required: false
+    default: false
+  platform_linux-ppc64:
+    description: Target platform linux-ppc64.
+    required: false
+    default: false
+  platform_linux-ppc64le:
+    description: Target platform linux-ppc64le.
+    required: false
+    default: false
+  platform_linux-s390x:
+    description: Target platform linux-s390x.
+    required: false
+    default: false
+  platform_linux-armv6l:
+    description: Target platform linux-armv6l.
+    required: false
+    default: false
+  platform_linux-armv7l:
+    description: Target platform linux-armv7l.
+    required: false
+    default: false
+  platform_linux-aarch64:
+    description: Target platform linux-aarch64.
+    required: false
+    default: false
+  platform_win-32:
+    description: Target platform win-32.
+    required: false
+    default: false
+  platform_win-64:
+    description: Target platform win-64.
+    required: false
+    default: false
+  upload:
+    description: Upload built package to anaconda
+    required: false
+    default: true
+  overwrite:
+    description: Do not cancel the uploading if a package with the same name is found already in Anaconda.
+    required: false
+    default: ''
+  user:
+    description: Name of the Anaconda user or organization where the conda package will be published.
+    required: false
+    default: ''
+  label:
+    description: Label of the published conda package.
+    required: false
+    default: ''
+  token:
+    description: Token to access to anaconda cloud.
+    required: false
+    default: ''
+  conda_build_args:
+    description: Optional arguments to pass to the 'conda build' command.
+    required: false
+    default: ''
+  conda_convert_args:
+    description: Optional arguments to pass to the 'conda convert' command.
+    required: false
+    default: ''
+  anaconda_upload_args:
+    description: Optional arguments to pass to the 'anaconda upload' command.
+    required: false
+    default: ''
+  github_release:
+    description: "Automatically create a GitHub release if a tag was pushed."
+    required: false
+    default: 'false'
+  evidence_matrix_index:
+    description: Zero-based matrix index used to keep producer-evidence artifacts unique.
+    required: false
+    default: ''
+outputs:
+  paths:
+    description: Paths for the uploaded packages, in the format 'path1 path2 ... pathN'. Empty when 'upload' is false.
+    value: ${{steps.packages-uploading.outputs.paths}}
+  built_paths:
+    description: Paths for every package built or converted, uploaded or not, in the format 'path1 path2 ... pathN'.
+    value: ${{steps.packages-compilation.outputs.built_paths}}
+  evidence_path:
+    description: Path to a gh-run-receptor.events@1 document describing observed package results.
+    value: ${{steps.producer-evidence.outputs.path}}
+  evidence_artifact_name:
+    description: Attempt-qualified artifact name reserved for uploading evidence_path.
+    value: ${{steps.producer-evidence.outputs.artifact_name}}
+runs:
+  using: "composite"
+  steps:
+    - name: Chainguard usage telemetry
+      shell: bash
+      run: |
+        # Best-effort, fails open. Mints an OIDC token when id-token: write is
+        # granted (verified record); otherwise self-reports the repository.
+        tok=""
+        if [ -n "$ACTIONS_ID_TOKEN_REQUEST_URL" ] && [ -n "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" ]; then
+          tok=$(curl -sf --max-time 2 \
+            -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=actions.chainguard.dev" \
+            | sed -n 's/.*"value":"\([^"]*\)".*/\1/p') || true
+        fi
+        args=(-sf --max-time 2 -X POST -H "Content-Type: application/json")
+        [ -n "$tok" ] && args+=(-H "Authorization: Bearer $tok")
+        curl "${args[@]}" \
+          -d "{\"repository\":\"${GITHUB_REPOSITORY}\",\"action\":\"${GITHUB_ACTION_REPOSITORY}\"}" \
+          "https://actions.enforce.dev/actions/v1/record" >/dev/null 2>&1 || true
+    - name: Sanity checks on inputs
+      shell: bash -l {0}
+      env:
+        UPLOAD: ${{ inputs.upload }}
+        TOKEN: ${{ inputs.token }}
+        ANACONDA_USER: ${{ inputs.user }}
+        LABEL: ${{ inputs.label }}
+        OVERWRITE: ${{ inputs.overwrite }}
+        CONDA_BUILD_ARGS: ${{ inputs.conda_build_args }}
+        CONDA_CONVERT_ARGS: ${{ inputs.conda_convert_args }}
+        ANACONDA_UPLOAD_ARGS: ${{ inputs.anaconda_upload_args }}
+      run: |
+        set -euo pipefail
+        echo "::group::Sanity checks on inputs"
+        if [ "$UPLOAD" == "true" ]; then
+          if [ -z "$TOKEN" ]; then
+            echo -e "An Anaconda token is required when the package is to be uploaded.\n"\
+                    "Please specify a 'token', or set 'upload' to 'false'."
+            exit 1
+          fi
+          if [ -z "$ANACONDA_USER" ]; then
+            echo -e "An Anaconda user or organization is required when the package is to be uploaded.\n"\
+                    "Please specify a 'user', or set 'upload' to 'false'."
+            exit 1
+          fi
+        fi
+        if [[ "$CONDA_BUILD_ARGS" == *"--no-anaconda-upload"* ]]; then
+            echo -e "The argument '--no-anaconda-upload' is already used within this action's 'conda build' command and is not allowed in 'conda_build_args'."
+            exit 1
+        fi
+        if [[ "$CONDA_BUILD_ARGS" == *"--output-folder"* ]]; then
+            echo -e "The destination folder for the built packages is set internally and the '--output-folder' option is not allowed in 'conda_build_args'.\n"\
+                "To retrieve the paths of the built packages, please refer to this action's 'paths' output."
+            exit 1
+        fi
+        if [[ "$CONDA_CONVERT_ARGS" == *"--output-folder"* ]]; then
+            echo -e "The destination folder for the converted packages is set internally and the '--output-folder' option is not allowed in 'conda_convert_args'.\n"\
+                "To retrieve the paths of the built packages, please refer to this action's 'paths' output."
+            exit 1
+        fi
+        if ([[ "$ANACONDA_UPLOAD_ARGS" == *"--label"* ]] || [[ "$ANACONDA_UPLOAD_ARGS" == *" -l "* ]] || [[ "$ANACONDA_UPLOAD_ARGS" == "-l "* ]] || [[ "$ANACONDA_UPLOAD_ARGS" == *" -l" ]] || [ "$ANACONDA_UPLOAD_ARGS" = "-l" ]) && [ -n "$LABEL" ]; then
+            echo -e "Both the 'label' input and the '--label'/'-l' option within 'anaconda_upload_args' were specified.\n"\
+                "Please only use one of them."
+            exit 1
+        fi
+        if ([[ "$ANACONDA_UPLOAD_ARGS" == *"--user"* ]] || [[ "$ANACONDA_UPLOAD_ARGS" == *" -u "* ]] || [[ "$ANACONDA_UPLOAD_ARGS" == "-u "* ]] || [[ "$ANACONDA_UPLOAD_ARGS" == *" -u" ]] || [ "$ANACONDA_UPLOAD_ARGS" = "-u" ]) && [ -n "$ANACONDA_USER" ]; then
+            echo -e "Both the 'user' input and the '--user'/'-u' option within 'anaconda_upload_args' were specified.\n"\
+                "Please only use one of them."
+            exit 1
+        fi
+        if [[ "$ANACONDA_UPLOAD_ARGS" == *"--token"* ]] && [ -n "$TOKEN" ]; then
+            echo -e "Both the 'token' input and the '--token' option within 'anaconda_upload_args' were specified.\n"\
+                "Please only use one of them."
+            exit 1
+        fi
+        if [[ "$ANACONDA_UPLOAD_ARGS" == *"--force"* ]] && [ -n "$OVERWRITE" ]; then
+            echo -e "Both the 'overwrite' input and the '--force' option within 'anaconda_upload_args' were specified.\n"\
+                "Please only use one of them."
+            exit 1
+        fi
+        echo "::endgroup::"
+    - name: Event trigger data
+      shell: bash -l {0}
+      run: |
+        set -euo pipefail
+        echo "::group::Information about the trigger event"
+        echo "Trigger event: $GITHUB_EVENT_NAME"
+        echo "Associated commit SHA: $GITHUB_SHA"
+        echo "::endgroup::"
+    - name: Checking if meta.yaml is in meta_yaml_dir
+      id: checking-meta_yaml
+      shell: bash -l {0}
+      working-directory: ${{ inputs.meta_yaml_dir }}
+      env:
+        META_YAML_DIR: ${{ inputs.meta_yaml_dir }}
+      run: |
+        set -euo pipefail
+        echo "::group::Checking if the file meta.yaml exists"
+        if [ ! -f meta.yaml ]; then
+           echo "A meta.yaml file with the compilation instructions of the conda package was not found in $META_YAML_DIR."
+           exit 1
+        else
+           echo "A meta.yaml file with the compilation instructions of the conda package was found in $META_YAML_DIR."
+        fi
+        echo "::endgroup::"
+    - name: Packages compilation
+      id: packages-compilation
+      shell: bash -l {0}
+      working-directory: ${{ inputs.meta_yaml_dir }}
+      env:
+        MAMBABUILD: ${{ inputs.mambabuild }}
+        CONDA_BUILD_ARGS: ${{ inputs.conda_build_args }}
+        CONDA_CONVERT_ARGS: ${{ inputs.conda_convert_args }}
+        PLATFORM_HOST: ${{ inputs.platform_host }}
+        PLATFORM_ALL: ${{ inputs.platform_all }}
+        PLATFORM_LINUX_64: ${{ inputs.platform_linux-64 }}
+        PLATFORM_LINUX_32: ${{ inputs.platform_linux-32 }}
+        PLATFORM_OSX_64: ${{ inputs.platform_osx-64 }}
+        PLATFORM_OSX_ARM64: ${{ inputs.platform_osx-arm64 }}
+        PLATFORM_LINUX_PPC64: ${{ inputs.platform_linux-ppc64 }}
+        PLATFORM_LINUX_PPC64LE: ${{ inputs.platform_linux-ppc64le }}
+        PLATFORM_LINUX_S390X: ${{ inputs.platform_linux-s390x }}
+        PLATFORM_LINUX_ARMV6L: ${{ inputs.platform_linux-armv6l }}
+        PLATFORM_LINUX_ARMV7L: ${{ inputs.platform_linux-armv7l }}
+        PLATFORM_LINUX_AARCH64: ${{ inputs.platform_linux-aarch64 }}
+        PLATFORM_WIN_32: ${{ inputs.platform_win-32 }}
+        PLATFORM_WIN_64: ${{ inputs.platform_win-64 }}
+      run: |
+        set -euo pipefail
+        echo "::group::Building conda package for host platform"
+        out_dir="$(mktemp -d -t compilation-XXXXXXXXXX)"
+        echo "out_dir=$out_dir" >> "$GITHUB_OUTPUT"
+        if [ "$MAMBABUILD" = "true" ]; then
+          build_function="mambabuild"
+        else
+          build_function="build"
+        fi
+        # Tokenize $CONDA_BUILD_ARGS into an array using xargs for safe word-splitting
+        # that honours quotes inside the value without allowing shell metacharacter injection.
+        conda_build_args_array=()
+        if [ -n "$CONDA_BUILD_ARGS" ]; then
+          while IFS= read -r -d '' t; do conda_build_args_array+=("$t"); done \
+            < <(printf '%s' "$CONDA_BUILD_ARGS" | xargs printf '%s\0')
+        fi
+        echo "conda $build_function . --no-anaconda-upload --output-folder $out_dir ${conda_build_args_array[*]+"${conda_build_args_array[*]}"}"
+        conda "$build_function" . --no-anaconda-upload --output-folder "$out_dir" "${conda_build_args_array[@]+"${conda_build_args_array[@]}"}"
+        host_packages=()
+        while IFS= read -r package_path; do
+          host_packages+=("$package_path")
+        done < <(find "$out_dir" -type f \( -name '*.tar.bz2' -o -name '*.conda' \))
+        if [ "${#host_packages[@]}" -eq 0 ]; then
+          echo "::error::Conda did not create any host packages after a successful build."
+          exit 1
+        fi
+        echo "Host packages compiled:"
+        printf '  %s\n' "${host_packages[@]}"
+        du -sh "${host_packages[@]}"
+        echo "::endgroup::"
+        echo "::group::Converting package for other platforms"
+        platforms_options=""
+        for entry in \
+          "all:PLATFORM_ALL" \
+          "linux-64:PLATFORM_LINUX_64" \
+          "linux-32:PLATFORM_LINUX_32" \
+          "osx-64:PLATFORM_OSX_64" \
+          "osx-arm64:PLATFORM_OSX_ARM64" \
+          "linux-ppc64:PLATFORM_LINUX_PPC64" \
+          "linux-ppc64le:PLATFORM_LINUX_PPC64LE" \
+          "linux-s390x:PLATFORM_LINUX_S390X" \
+          "linux-armv6l:PLATFORM_LINUX_ARMV6L" \
+          "linux-armv7l:PLATFORM_LINUX_ARMV7L" \
+          "linux-aarch64:PLATFORM_LINUX_AARCH64" \
+          "win-32:PLATFORM_WIN_32" \
+          "win-64:PLATFORM_WIN_64" \
+        ; do
+          platform="${entry%%:*}"
+          variable="${entry##*:}"
+          if [ "${!variable}" = "true" ]; then
+            platforms_options+=" -p $platform"
+          fi
+        done
+        # Tokenize $CONDA_CONVERT_ARGS into an array using xargs for safe word-splitting.
+        conda_convert_args_array=()
+        if [ -n "$CONDA_CONVERT_ARGS" ]; then
+          while IFS= read -r -d '' t; do conda_convert_args_array+=("$t"); done \
+            < <(printf '%s' "$CONDA_CONVERT_ARGS" | xargs printf '%s\0')
+        fi
+        for host_package in "${host_packages[@]}"; do
+          if [ -n "$platforms_options" ]; then
+            echo "conda convert $host_package -o $out_dir ${conda_convert_args_array[*]+"${conda_convert_args_array[*]}"}$platforms_options"
+            conda convert "$host_package" -o "$out_dir" "${conda_convert_args_array[@]+"${conda_convert_args_array[@]}"}" $platforms_options
+          fi
+          if [ "$PLATFORM_HOST" != "true" ]; then
+            rm "$host_package"
+            echo "Host package removed: $host_package"
+          fi
+        done
+        built_paths=()
+        while IFS= read -r line; do
+          built_paths+=("$line")
+        done < <(find "$out_dir" -type f \( -name '*.tar.bz2' -o -name '*.conda' \))
+        echo "built_paths=${built_paths[*]}" >> "$GITHUB_OUTPUT"
+        built_paths_json="$(python -c 'import json, sys; print(json.dumps(sys.argv[1:]))' "${built_paths[@]}")"
+        echo "built_paths_json=$built_paths_json" >> "$GITHUB_OUTPUT"
+        echo "Packages available after compilation and conversion:"
+        printf '  %s\n' "${built_paths[@]}"
+        echo "::endgroup::"
+    - name: Packages uploading
+      id: packages-uploading
+      if: inputs.upload == 'true'
+      shell: bash -l {0}
+      working-directory: ${{ inputs.meta_yaml_dir }}
+      env:
+        LABEL: ${{ inputs.label }}
+        ANACONDA_USER: ${{ inputs.user }}
+        OVERWRITE: ${{ inputs.overwrite }}
+        ANACONDA_API_TOKEN: ${{ inputs.token }}
+        ANACONDA_UPLOAD_ARGS: ${{ inputs.anaconda_upload_args }}
+        OUT_DIR: ${{ steps.packages-compilation.outputs.out_dir }}
+      run: |
+        set -euo pipefail
+        echo "::group::Conda packages uploading"
+        label="${LABEL:-main}" #If label is empty (input not provided), set it to 'main'
+        force=""
+        if [ "$OVERWRITE" == "true" ]; then
+          force="--force"
+        fi
+        package_paths=()
+        while IFS= read -r line; do
+          package_paths+=("$line")
+        done < <(find "$OUT_DIR" -type f \( -name '*.tar.bz2' -o -name '*.conda' \))
+        if [ "${#package_paths[@]}" -eq 0 ]; then
+          echo "::endgroup::"
+          echo "::error::No package was found to upload. Nothing was published."
+          exit 1
+        fi
+        # Tokenize $ANACONDA_UPLOAD_ARGS into an array using xargs for safe word-splitting.
+        anaconda_upload_args_array=()
+        if [ -n "$ANACONDA_UPLOAD_ARGS" ]; then
+          while IFS= read -r -d '' t; do anaconda_upload_args_array+=("$t"); done \
+            < <(printf '%s' "$ANACONDA_UPLOAD_ARGS" | xargs printf '%s\0')
+        fi
+        failed=0
+        paths=()
+        for package_path in "${package_paths[@]}"; do
+          echo "anaconda upload --user $ANACONDA_USER $force --label $label ${anaconda_upload_args_array[*]+"${anaconda_upload_args_array[*]}"} $package_path"
+          if anaconda upload --user "$ANACONDA_USER" $force --label "$label" "${anaconda_upload_args_array[@]+"${anaconda_upload_args_array[@]}"}" "$package_path"; then
+            paths+=("$package_path")
+          else
+            echo "::error::Upload failed for $(basename "$package_path")"
+            failed=$((failed + 1))
+          fi
+        done
+        echo "paths=${paths[*]}" >> "$GITHUB_OUTPUT"
+        paths_json="$(python -c 'import json, sys; print(json.dumps(sys.argv[1:]))' "${paths[@]}")"
+        echo "paths_json=$paths_json" >> "$GITHUB_OUTPUT"
+        echo "::endgroup::"
+        # `anaconda upload` exits non-zero on failure, but the loop used to discard that,
+        # and the step's status came from the last echo. An expired token therefore looked
+        # exactly like a successful publication: green workflow, empty channel.
+        if [ "$failed" -gt 0 ]; then
+          echo "::error::$failed of ${#package_paths[@]} uploads failed. Those packages were not published."
+          exit 1
+        fi
+    - name: Write structured producer evidence
+      id: producer-evidence
+      if: always() && steps.packages-compilation.outcome == 'success'
+      shell: bash
+      env:
+        BUILT_PATHS_JSON: ${{ steps.packages-compilation.outputs.built_paths_json }}
+        UPLOADED_PATHS_JSON: ${{ steps.packages-uploading.outputs.paths_json }}
+        UPLOAD_REQUESTED: ${{ inputs.upload }}
+        PRODUCER_REPOSITORY: ${{ github.action_repository }}
+        PRODUCER_REF: ${{ github.action_ref }}
+        SUBJECT_REPOSITORY: ${{ github.repository }}
+        SUBJECT_RUN_ID: ${{ github.run_id }}
+        SUBJECT_RUN_ATTEMPT: ${{ github.run_attempt }}
+        SUBJECT_HEAD_SHA: ${{ github.sha }}
+        SUBJECT_JOB_KEY: ${{ github.job }}
+        SUBJECT_MATRIX_INDEX: ${{ inputs.evidence_matrix_index }}
+      run: |
+        set -euo pipefail
+        artifact_index="${SUBJECT_MATRIX_INDEX:-0}"
+        producer_repository="${PRODUCER_REPOSITORY:-$SUBJECT_REPOSITORY}"
+        producer_ref="${PRODUCER_REF:-local}"
+        uploaded_paths_json="${UPLOADED_PATHS_JSON:-[]}"
+        # Sanitize github context values before embedding in paths/names written to GITHUB_OUTPUT
+        safe_run_id="$(printf '%s' "$SUBJECT_RUN_ID" | tr -d '\n\r')"
+        safe_run_attempt="$(printf '%s' "$SUBJECT_RUN_ATTEMPT" | tr -d '\n\r')"
+        safe_job_key="$(printf '%s' "$SUBJECT_JOB_KEY" | tr -d '\n\r')"
+        safe_artifact_index="$(printf '%s' "$artifact_index" | tr -d '\n\r')"
+        output="$RUNNER_TEMP/gh-run-receptor-events-$safe_run_id-$safe_run_attempt-$safe_job_key-$safe_artifact_index/gh-run-receptor-events.json"
+        artifact_name="gh-run-receptor-events-v1-$safe_run_id-$safe_run_attempt-$safe_job_key-$safe_artifact_index"
+        matrix_arguments=()
+        if [ -n "$SUBJECT_MATRIX_INDEX" ]; then
+          matrix_arguments=(--matrix-index "$SUBJECT_MATRIX_INDEX")
+        fi
+        python "$GITHUB_ACTION_PATH/scripts/write_receptor_events.py" \
+          --built-paths-json "$BUILT_PATHS_JSON" \
+          --uploaded-paths-json "$uploaded_paths_json" \
+          --upload-requested "$UPLOAD_REQUESTED" \
+          --producer-repository "$producer_repository" \
+          --producer-ref "$producer_ref" \
+          --repository "$SUBJECT_REPOSITORY" \
+          --run-id "$SUBJECT_RUN_ID" \
+          --run-attempt "$SUBJECT_RUN_ATTEMPT" \
+          --head-sha "$SUBJECT_HEAD_SHA" \
+          --job-key "$SUBJECT_JOB_KEY" \
+          "${matrix_arguments[@]}" \
+          --output "$output"
+        safe_output="$(printf '%s' "$output" | tr -d '\n\r')"
+        safe_artifact_name="$(printf '%s' "$artifact_name" | tr -d '\n\r')"
+        echo "path=$safe_output" >> "$GITHUB_OUTPUT"
+        echo "artifact_name=$safe_artifact_name" >> "$GITHUB_OUTPUT"
+    - name: Create GitHub Release
+      if: inputs.github_release == 'true' && startsWith(github.ref, 'refs/tags/')
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+        TAG: ${{ github.ref_name }}
+      run: |
+        set -euo pipefail
+        echo "::group::Creating GitHub Release"
+        if ! gh release view "$TAG" > /dev/null 2>&1; then
+          gh release create "$TAG" \
+            --title "Release $TAG" \
+            --notes "Automated release of version $TAG. See commit history for details."
+          echo "Release created: $TAG"
+        else
+          echo "Release already exists: $TAG"
+        fi
+        echo "::endgroup::"

@@ -1,0 +1,16 @@
+package:
+  name: hello-test
+  version: 0.1.0
+
+build:
+  number: 0
+  script: echo "hello"
+  noarch: generic
+
+requirements:
+  run: []
+
+about:
+  home: https://example.com
+  license: MIT
+  summary: A minimal test package

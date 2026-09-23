@@ -1,0 +1,66 @@
+name: Test build conda package without upload
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install Miniconda
+        run: |
+          set -euo pipefail
+          curl -fsSL https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -o /tmp/miniconda.sh
+          bash /tmp/miniconda.sh -b -p "$HOME/miniconda3"
+          echo "$HOME/miniconda3/bin" >> "$GITHUB_PATH"
+          "$HOME/miniconda3/bin/conda" init bash
+          "$HOME/miniconda3/bin/conda" install -y conda-build
+      - id: action
+        uses: .
+        with:
+          meta_yaml_dir: tests/fixtures/conda-pkg
+          upload: 'false'
+          platform_host: 'true'
+      - name: Assert built_paths output is non-empty
+        env:
+          BUILT_PATHS: ${{ steps.action.outputs.built_paths }}
+        run: |
+          echo "built_paths: $BUILT_PATHS"
+          if [ -z "$BUILT_PATHS" ]; then
+            echo "FAIL: expected built_paths to be non-empty after a successful build"
+            exit 1
+          fi
+          echo "PASS: built_paths is non-empty: $BUILT_PATHS"
+      - name: Assert paths output is empty (upload=false)
+        env:
+          PATHS: ${{ steps.action.outputs.paths }}
+        run: |
+          echo "paths: $PATHS"
+          if [ -n "$PATHS" ]; then
+            echo "FAIL: expected paths to be empty when upload=false, but got: $PATHS"
+            exit 1
+          fi
+          echo "PASS: paths is empty as expected when upload=false"
+      - name: Assert evidence_path output is set
+        env:
+          EVIDENCE_PATH: ${{ steps.action.outputs.evidence_path }}
+        run: |
+          echo "evidence_path: $EVIDENCE_PATH"
+          if [ -z "$EVIDENCE_PATH" ]; then
+            echo "FAIL: expected evidence_path to be set after a successful build"
+            exit 1
+          fi
+          if [ ! -f "$EVIDENCE_PATH" ]; then
+            echo "FAIL: evidence_path '$EVIDENCE_PATH' does not point to an existing file"
+            exit 1
+          fi
+          echo "PASS: evidence_path is set and file exists"
+      - name: Assert evidence_artifact_name output is set
+        env:
+          ARTIFACT_NAME: ${{ steps.action.outputs.evidence_artifact_name }}
+        run: |
+          echo "evidence_artifact_name: $ARTIFACT_NAME"
+          if [ -z "$ARTIFACT_NAME" ]; then
+            echo "FAIL: expected evidence_artifact_name to be set after a successful build"
+            exit 1
+          fi
+          echo "PASS: evidence_artifact_name is set: $ARTIFACT_NAME"
