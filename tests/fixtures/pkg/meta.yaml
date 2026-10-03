@@ -1,0 +1,22 @@
+package:
+  name: dummy
+  version: 0.0.1
+
+source:
+  path: .
+
+build:
+  number: 0
+  noarch: python
+  script: "echo 'dummy build'"
+
+requirements:
+  host:
+    - python
+  run:
+    - python
+
+about:
+  home: https://example.com
+  license: MIT
+  summary: Dummy package for testing

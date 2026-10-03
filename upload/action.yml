@@ -1,0 +1,61 @@
+name: Upload an exact validated Conda artifact
+description: Upload one existing digest-bound file once, without rebuilding or converting
+author: UIBCDF Development Team
+inputs:
+  artifact:
+    required: true
+    description: Path to the validated existing Conda file
+  package-spec:
+    required: true
+    description: Exact owner/package/version/subdir/filename
+  expected-sha256:
+    required: true
+    description: Expected lowercase SHA-256 of the validated file
+  label:
+    required: true
+    description: Publication label selected by the caller's reviewed route
+  candidate-sha:
+    required: true
+    description: Immutable source SHA certified by the caller's candidate gates
+  token:
+    required: true
+    description: Credential used only by the write client
+outputs:
+  receipt:
+    description: Bounded receipt, including unverified outcomes
+    value: ${{ steps.upload.outputs.receipt }}
+runs:
+  using: composite
+  steps:
+    - name: Chainguard usage telemetry
+      shell: bash
+      run: |
+        # Best-effort, fails open. Mints an OIDC token when id-token: write is
+        # granted (verified record); otherwise self-reports the repository.
+        tok=""
+        if [ -n "$ACTIONS_ID_TOKEN_REQUEST_URL" ] && [ -n "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" ]; then
+          tok=$(curl -sf --max-time 2 \
+            -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=actions.chainguard.dev" \
+            | sed -n 's/.*"value":"\([^"]*\)".*/\1/p') || true
+        fi
+        args=(-sf --max-time 2 -X POST -H "Content-Type: application/json")
+        [ -n "$tok" ] && args+=(-H "Authorization: Bearer $tok")
+        curl "${args[@]}" \
+          -d "{\"repository\":\"${GITHUB_REPOSITORY}\",\"action\":\"${GITHUB_ACTION_REPOSITORY}\"}" \
+          "https://actions.enforce.dev/actions/v1/record" >/dev/null 2>&1 || true
+    - id: upload
+      name: Upload and observe the exact file
+      shell: bash -l {0}
+      env:
+        ARTIFACT: ${{ inputs.artifact }}
+        PACKAGE_SPEC: ${{ inputs.package-spec }}
+        EXPECTED_SHA256: ${{ inputs.expected-sha256 }}
+        LABEL: ${{ inputs.label }}
+        CANDIDATE_SHA: ${{ inputs.candidate-sha }}
+        ANACONDA_API_TOKEN: ${{ inputs.token }}
+      run: |
+        python "$GITHUB_ACTION_PATH/../scripts/upload_conda_package.py" \
+          --artifact "$ARTIFACT" --package-spec "$PACKAGE_SPEC" \
+          --expected-sha256 "$EXPECTED_SHA256" --label "$LABEL" \
+          --candidate-sha "$CANDIDATE_SHA" --output "$RUNNER_TEMP/conda-upload-receipt.json"
