@@ -62,4 +62,9 @@ runs:
         FROM_LABEL: ${{ inputs.from-label }}
         TO_LABEL: ${{ inputs.to-label }}
       run: >-
-        python "$GITHUB_ACTION_PATH/../scripts/promote_conda_package.py" --package-spec "$PACKAGE_SPEC" --expected-sha256 "$EXPECTED_SHA256" --from-label "$FROM_LABEL" --to-label "$TO_LABEL" --output "$RUNNER_TEMP/conda-promotion-receipt.json"
+        python "$GITHUB_ACTION_PATH/../scripts/promote_conda_package.py"
+        --package-spec "$PACKAGE_SPEC"
+        --expected-sha256 "$EXPECTED_SHA256"
+        --from-label "$FROM_LABEL"
+        --to-label "$TO_LABEL"
+        --output "$RUNNER_TEMP/conda-promotion-receipt.json"

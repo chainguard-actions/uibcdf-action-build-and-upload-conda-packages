@@ -121,6 +121,7 @@ outputs:
   evidence_artifact_name:
     description: Attempt-qualified artifact name reserved for uploading evidence_path.
     value: ${{steps.producer-evidence.outputs.artifact_name}}
+
 runs:
   using: "composite"
   steps:
@@ -155,6 +156,8 @@ runs:
       run: |
         set -euo pipefail
         echo "::group::Sanity checks on inputs"
+        # contains() in expressions is a case-insensitive substring test.
+        shopt -s nocasematch
         if [ "$UPLOAD" == "true" ]; then
           if [ -z "$TOKEN" ]; then
             echo -e "An Anaconda token is required when the package is to be uploaded.\n"\
@@ -181,12 +184,12 @@ runs:
                 "To retrieve the paths of the built packages, please refer to this action's 'paths' output."
             exit 1
         fi
-        if ([[ "$ANACONDA_UPLOAD_ARGS" == *"--label"* ]] || [[ "$ANACONDA_UPLOAD_ARGS" == *" -l "* ]] || [[ "$ANACONDA_UPLOAD_ARGS" == "-l "* ]] || [[ "$ANACONDA_UPLOAD_ARGS" == *" -l" ]] || [ "$ANACONDA_UPLOAD_ARGS" = "-l" ]) && [ -n "$LABEL" ]; then
+        if [[ "$ANACONDA_UPLOAD_ARGS" == *"--label"* || "$ANACONDA_UPLOAD_ARGS" == *"-l"* ]] && [ -n "$LABEL" ]; then
             echo -e "Both the 'label' input and the '--label'/'-l' option within 'anaconda_upload_args' were specified.\n"\
                 "Please only use one of them."
             exit 1
         fi
-        if ([[ "$ANACONDA_UPLOAD_ARGS" == *"--user"* ]] || [[ "$ANACONDA_UPLOAD_ARGS" == *" -u "* ]] || [[ "$ANACONDA_UPLOAD_ARGS" == "-u "* ]] || [[ "$ANACONDA_UPLOAD_ARGS" == *" -u" ]] || [ "$ANACONDA_UPLOAD_ARGS" = "-u" ]) && [ -n "$ANACONDA_USER" ]; then
+        if [[ "$ANACONDA_UPLOAD_ARGS" == *"--user"* || "$ANACONDA_UPLOAD_ARGS" == *"-u"* ]] && [ -n "$ANACONDA_USER" ]; then
             echo -e "Both the 'user' input and the '--user'/'-u' option within 'anaconda_upload_args' were specified.\n"\
                 "Please only use one of them."
             exit 1
@@ -258,15 +261,17 @@ runs:
         else
           build_function="build"
         fi
-        # Tokenize $CONDA_BUILD_ARGS into an array using xargs for safe word-splitting
-        # that honours quotes inside the value without allowing shell metacharacter injection.
-        conda_build_args_array=()
-        if [ -n "$CONDA_BUILD_ARGS" ]; then
-          while IFS= read -r -d '' t; do conda_build_args_array+=("$t"); done \
-            < <(printf '%s' "$CONDA_BUILD_ARGS" | xargs printf '%s\0')
-        fi
-        echo "conda $build_function . --no-anaconda-upload --output-folder $out_dir ${conda_build_args_array[*]+"${conda_build_args_array[*]}"}"
-        conda "$build_function" . --no-anaconda-upload --output-folder "$out_dir" "${conda_build_args_array[@]+"${conda_build_args_array[@]}"}"
+        # $CONDA_BUILD_ARGS and friends are split into arrays with an unquoted
+        # assignment so that several arguments become several words (same split
+        # and glob as an unquoted expansion). They are read from the environment,
+        # not interpolated into this script, so their content cannot become shell
+        # syntax.
+        echo "conda $build_function . --no-anaconda-upload --output-folder $out_dir $CONDA_BUILD_ARGS"
+        # shellcheck disable=SC2206
+        build_args=($CONDA_BUILD_ARGS)
+        # shellcheck disable=SC2206
+        convert_args=($CONDA_CONVERT_ARGS)
+        conda "$build_function" . --no-anaconda-upload --output-folder "$out_dir" ${build_args[@]+"${build_args[@]}"}
         host_packages=()
         while IFS= read -r package_path; do
           host_packages+=("$package_path")
@@ -302,16 +307,12 @@ runs:
             platforms_options+=" -p $platform"
           fi
         done
-        # Tokenize $CONDA_CONVERT_ARGS into an array using xargs for safe word-splitting.
-        conda_convert_args_array=()
-        if [ -n "$CONDA_CONVERT_ARGS" ]; then
-          while IFS= read -r -d '' t; do conda_convert_args_array+=("$t"); done \
-            < <(printf '%s' "$CONDA_CONVERT_ARGS" | xargs printf '%s\0')
-        fi
         for host_package in "${host_packages[@]}"; do
           if [ -n "$platforms_options" ]; then
-            echo "conda convert $host_package -o $out_dir ${conda_convert_args_array[*]+"${conda_convert_args_array[*]}"}$platforms_options"
-            conda convert "$host_package" -o "$out_dir" "${conda_convert_args_array[@]+"${conda_convert_args_array[@]}"}" $platforms_options
+            echo "conda convert $host_package -o $out_dir $CONDA_CONVERT_ARGS$platforms_options"
+            # shellcheck disable=SC2206
+            platform_args=($platforms_options)
+            conda convert "$host_package" -o "$out_dir" ${convert_args[@]+"${convert_args[@]}"} "${platform_args[@]}"
           fi
           if [ "$PLATFORM_HOST" != "true" ]; then
             rm "$host_package"
@@ -322,7 +323,8 @@ runs:
         while IFS= read -r line; do
           built_paths+=("$line")
         done < <(find "$out_dir" -type f \( -name '*.tar.bz2' -o -name '*.conda' \))
-        echo "built_paths=${built_paths[*]}" >> "$GITHUB_OUTPUT"
+        safe_built_paths=$(printf '%s' "${built_paths[*]}" | tr -d '\n\r')
+        echo "built_paths=$safe_built_paths" >> "$GITHUB_OUTPUT"
         built_paths_json="$(python -c 'import json, sys; print(json.dumps(sys.argv[1:]))' "${built_paths[@]}")"
         echo "built_paths_json=$built_paths_json" >> "$GITHUB_OUTPUT"
         echo "Packages available after compilation and conversion:"
@@ -357,24 +359,25 @@ runs:
           echo "::error::No package was found to upload. Nothing was published."
           exit 1
         fi
-        # Tokenize $ANACONDA_UPLOAD_ARGS into an array using xargs for safe word-splitting.
-        anaconda_upload_args_array=()
-        if [ -n "$ANACONDA_UPLOAD_ARGS" ]; then
-          while IFS= read -r -d '' t; do anaconda_upload_args_array+=("$t"); done \
-            < <(printf '%s' "$ANACONDA_UPLOAD_ARGS" | xargs printf '%s\0')
-        fi
         failed=0
         paths=()
+        # shellcheck disable=SC2206
+        upload_args=($ANACONDA_UPLOAD_ARGS)
+        force_args=()
+        if [ -n "$force" ]; then
+          force_args=("$force")
+        fi
         for package_path in "${package_paths[@]}"; do
-          echo "anaconda upload --user $ANACONDA_USER $force --label $label ${anaconda_upload_args_array[*]+"${anaconda_upload_args_array[*]}"} $package_path"
-          if anaconda upload --user "$ANACONDA_USER" $force --label "$label" "${anaconda_upload_args_array[@]+"${anaconda_upload_args_array[@]}"}" "$package_path"; then
+          echo "anaconda upload --user $ANACONDA_USER $force --label $label $ANACONDA_UPLOAD_ARGS $package_path"
+          if anaconda upload --user "$ANACONDA_USER" ${force_args[@]+"${force_args[@]}"} --label "$label" ${upload_args[@]+"${upload_args[@]}"} "$package_path"; then
             paths+=("$package_path")
           else
             echo "::error::Upload failed for $(basename "$package_path")"
             failed=$((failed + 1))
           fi
         done
-        echo "paths=${paths[*]}" >> "$GITHUB_OUTPUT"
+        safe_paths=$(printf '%s' "${paths[*]}" | tr -d '\n\r')
+        echo "paths=$safe_paths" >> "$GITHUB_OUTPUT"
         paths_json="$(python -c 'import json, sys; print(json.dumps(sys.argv[1:]))' "${paths[@]}")"
         echo "paths_json=$paths_json" >> "$GITHUB_OUTPUT"
         echo "::endgroup::"
@@ -407,13 +410,8 @@ runs:
         producer_repository="${PRODUCER_REPOSITORY:-$SUBJECT_REPOSITORY}"
         producer_ref="${PRODUCER_REF:-local}"
         uploaded_paths_json="${UPLOADED_PATHS_JSON:-[]}"
-        # Sanitize github context values before embedding in paths/names written to GITHUB_OUTPUT
-        safe_run_id="$(printf '%s' "$SUBJECT_RUN_ID" | tr -d '\n\r')"
-        safe_run_attempt="$(printf '%s' "$SUBJECT_RUN_ATTEMPT" | tr -d '\n\r')"
-        safe_job_key="$(printf '%s' "$SUBJECT_JOB_KEY" | tr -d '\n\r')"
-        safe_artifact_index="$(printf '%s' "$artifact_index" | tr -d '\n\r')"
-        output="$RUNNER_TEMP/gh-run-receptor-events-$safe_run_id-$safe_run_attempt-$safe_job_key-$safe_artifact_index/gh-run-receptor-events.json"
-        artifact_name="gh-run-receptor-events-v1-$safe_run_id-$safe_run_attempt-$safe_job_key-$safe_artifact_index"
+        output="$RUNNER_TEMP/gh-run-receptor-events-$SUBJECT_RUN_ID-$SUBJECT_RUN_ATTEMPT-$SUBJECT_JOB_KEY-$artifact_index/gh-run-receptor-events.json"
+        artifact_name="gh-run-receptor-events-v1-$SUBJECT_RUN_ID-$SUBJECT_RUN_ATTEMPT-$SUBJECT_JOB_KEY-$artifact_index"
         matrix_arguments=()
         if [ -n "$SUBJECT_MATRIX_INDEX" ]; then
           matrix_arguments=(--matrix-index "$SUBJECT_MATRIX_INDEX")
@@ -431,8 +429,8 @@ runs:
           --job-key "$SUBJECT_JOB_KEY" \
           "${matrix_arguments[@]}" \
           --output "$output"
-        safe_output="$(printf '%s' "$output" | tr -d '\n\r')"
-        safe_artifact_name="$(printf '%s' "$artifact_name" | tr -d '\n\r')"
+        safe_output=$(printf '%s' "$output" | tr -d '\n\r')
+        safe_artifact_name=$(printf '%s' "$artifact_name" | tr -d '\n\r')
         echo "path=$safe_output" >> "$GITHUB_OUTPUT"
         echo "artifact_name=$safe_artifact_name" >> "$GITHUB_OUTPUT"
     - name: Create GitHub Release
