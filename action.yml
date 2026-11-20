@@ -123,6 +123,7 @@ outputs:
   evidence_artifact_name:
     description: Attempt-qualified artifact name reserved for uploading evidence_path.
     value: ${{steps.producer-evidence.outputs.artifact_name}}
+
 runs:
   using: "composite"
   steps:
@@ -151,9 +152,15 @@ runs:
         ANACONDA_USER: ${{ inputs.user }}
         LABEL: ${{ inputs.label }}
         OVERWRITE: ${{ inputs.overwrite }}
-        CONDA_BUILD_ARGS: ${{ inputs.conda_build_args }}
-        CONDA_CONVERT_ARGS: ${{ inputs.conda_convert_args }}
-        ANACONDA_UPLOAD_ARGS: ${{ inputs.anaconda_upload_args }}
+        BUILD_HAS_NO_UPLOAD: ${{ contains(inputs.conda_build_args, '--no-anaconda-upload') }}
+        BUILD_HAS_OUTPUT_FOLDER: ${{ contains(inputs.conda_build_args, '--output-folder') }}
+        CONVERT_HAS_OUTPUT_FOLDER: ${{ contains(inputs.conda_convert_args, '--output-folder') }}
+        UPLOAD_HAS_LABEL_LONG: ${{ contains(inputs.anaconda_upload_args, '--label') }}
+        UPLOAD_HAS_LABEL_SHORT: ${{ contains(inputs.anaconda_upload_args, '-l') }}
+        UPLOAD_HAS_USER_LONG: ${{ contains(inputs.anaconda_upload_args, '--user') }}
+        UPLOAD_HAS_USER_SHORT: ${{ contains(inputs.anaconda_upload_args, '-u') }}
+        UPLOAD_HAS_TOKEN: ${{ contains(inputs.anaconda_upload_args, '--token') }}
+        UPLOAD_HAS_FORCE: ${{ contains(inputs.anaconda_upload_args, '--force') }}
       run: |
         set -euo pipefail
         echo "::group::Sanity checks on inputs"
@@ -169,36 +176,36 @@ runs:
             exit 1
           fi
         fi
-        if [[ "$CONDA_BUILD_ARGS" == *"--no-anaconda-upload"* ]]; then
+        if [ "$BUILD_HAS_NO_UPLOAD" = "true" ]; then
             echo -e "The argument '--no-anaconda-upload' is already used within this action's 'conda build' command and is not allowed in 'conda_build_args'."
             exit 1
         fi
-        if [[ "$CONDA_BUILD_ARGS" == *"--output-folder"* ]]; then
+        if [ "$BUILD_HAS_OUTPUT_FOLDER" = "true" ]; then
             echo -e "The destination folder for the built packages is set internally and the '--output-folder' option is not allowed in 'conda_build_args'.\n"\
                 "To retrieve the paths of the built packages, please refer to this action's 'paths' output."
             exit 1
         fi
-        if [[ "$CONDA_CONVERT_ARGS" == *"--output-folder"* ]]; then
+        if [ "$CONVERT_HAS_OUTPUT_FOLDER" = "true" ]; then
             echo -e "The destination folder for the converted packages is set internally and the '--output-folder' option is not allowed in 'conda_convert_args'.\n"\
                 "To retrieve the paths of the built packages, please refer to this action's 'paths' output."
             exit 1
         fi
-        if ([[ "$ANACONDA_UPLOAD_ARGS" == *"--label"* ]] || [[ "$ANACONDA_UPLOAD_ARGS" == *"-l"* ]]) && [ -n "$LABEL" ]; then
+        if { [ "$UPLOAD_HAS_LABEL_LONG" = "true" ] || [ "$UPLOAD_HAS_LABEL_SHORT" = "true" ]; } && [ -n "$LABEL" ]; then
             echo -e "Both the 'label' input and the '--label'/'-l' option within 'anaconda_upload_args' were specified.\n"\
                 "Please only use one of them."
             exit 1
         fi
-        if ([[ "$ANACONDA_UPLOAD_ARGS" == *"--user"* ]] || [[ "$ANACONDA_UPLOAD_ARGS" == *"-u"* ]]) && [ -n "$ANACONDA_USER" ]; then
+        if { [ "$UPLOAD_HAS_USER_LONG" = "true" ] || [ "$UPLOAD_HAS_USER_SHORT" = "true" ]; } && [ -n "$ANACONDA_USER" ]; then
             echo -e "Both the 'user' input and the '--user'/'-u' option within 'anaconda_upload_args' were specified.\n"\
                 "Please only use one of them."
             exit 1
         fi
-        if [[ "$ANACONDA_UPLOAD_ARGS" == *"--token"* ]] && [ -n "$TOKEN" ]; then
+        if [ "$UPLOAD_HAS_TOKEN" = "true" ] && [ -n "$TOKEN" ]; then
             echo -e "Both the 'token' input and the '--token' option within 'anaconda_upload_args' were specified.\n"\
                 "Please only use one of them."
             exit 1
         fi
-        if [[ "$ANACONDA_UPLOAD_ARGS" == *"--force"* ]] && [ -n "$OVERWRITE" ]; then
+        if [ "$UPLOAD_HAS_FORCE" = "true" ] && [ -n "$OVERWRITE" ]; then
             echo -e "Both the 'overwrite' input and the '--force' option within 'anaconda_upload_args' were specified.\n"\
                 "Please only use one of them."
             exit 1
@@ -260,16 +267,17 @@ runs:
         else
           build_function="build"
         fi
-        # Tokenize $CONDA_BUILD_ARGS into an array using xargs for quote-aware splitting.
-        conda_build_args_array=()
-        if [ -n "$CONDA_BUILD_ARGS" ]; then
-          while IFS= read -r -d '' t; do conda_build_args_array+=("$t"); done \
-            < <(printf '%s' "$CONDA_BUILD_ARGS" | xargs printf '%s\0')
-        fi
-        echo "conda $build_function . --no-anaconda-upload --output-folder $out_dir ${conda_build_args_array[*]+"${conda_build_args_array[*]}"}"
+        # Split the argument lists exactly like upstream's unquoted expansion
+        # (whitespace split + glob). They are read from the environment, not
+        # interpolated into this script, so their content cannot become shell syntax.
+        # shellcheck disable=SC2206
+        conda_build_args=($CONDA_BUILD_ARGS)
+        # shellcheck disable=SC2206
+        conda_convert_args=($CONDA_CONVERT_ARGS)
+        echo "conda $build_function . --no-anaconda-upload --output-folder $out_dir $CONDA_BUILD_ARGS"
         # Activation keeps the shell function bound to the base manager. Use the
         # executable on PATH so build plugins come from the active environment.
-        command conda "$build_function" . --no-anaconda-upload --output-folder "$out_dir" "${conda_build_args_array[@]}"
+        command conda "$build_function" . --no-anaconda-upload --output-folder "$out_dir" ${conda_build_args[@]+"${conda_build_args[@]}"}
         host_packages=()
         while IFS= read -r package_path; do
           host_packages+=("$package_path")
@@ -284,6 +292,7 @@ runs:
         echo "::endgroup::"
         echo "::group::Converting package for other platforms"
         platforms_options=""
+        platforms_args=()
         for entry in \
           "all:PLATFORM_ALL" \
           "linux-64:PLATFORM_LINUX_64" \
@@ -303,6 +312,7 @@ runs:
           variable="${entry##*:}"
           if [ "${!variable}" = "true" ]; then
             platforms_options+=" -p $platform"
+            platforms_args+=(-p "$platform")
           fi
         done
         if [ -n "$platforms_options" ]; then
@@ -316,14 +326,8 @@ runs:
         fi
         for host_package in "${host_packages[@]}"; do
           if [ -n "$platforms_options" ]; then
-            # Tokenize $CONDA_CONVERT_ARGS into an array using xargs for quote-aware splitting.
-            conda_convert_args_array=()
-            if [ -n "$CONDA_CONVERT_ARGS" ]; then
-              while IFS= read -r -d '' t; do conda_convert_args_array+=("$t"); done \
-                < <(printf '%s' "$CONDA_CONVERT_ARGS" | xargs printf '%s\0')
-            fi
-            echo "conda convert $host_package -o $out_dir ${conda_convert_args_array[*]+"${conda_convert_args_array[*]}"}$platforms_options"
-            command conda convert "$host_package" -o "$out_dir" "${conda_convert_args_array[@]}" $platforms_options
+            echo "conda convert $host_package -o $out_dir $CONDA_CONVERT_ARGS$platforms_options"
+            command conda convert "$host_package" -o "$out_dir" ${conda_convert_args[@]+"${conda_convert_args[@]}"} "${platforms_args[@]}"
           fi
           if [ "$PLATFORM_HOST" != "true" ]; then
             rm "$host_package"
@@ -357,9 +361,14 @@ runs:
         echo "::group::Conda packages uploading"
         label="${LABEL:-main}" #If label is empty (input not provided), set it to 'main'
         force=""
+        force_args=()
         if [ "$OVERWRITE" == "true" ]; then
           force="--force"
+          force_args=(--force)
         fi
+        # Split exactly like upstream's unquoted $ANACONDA_UPLOAD_ARGS (whitespace + glob).
+        # shellcheck disable=SC2206
+        upload_args=($ANACONDA_UPLOAD_ARGS)
         package_paths=()
         while IFS= read -r line; do
           package_paths+=("$line")
@@ -369,17 +378,11 @@ runs:
           echo "::error::No package was found to upload. Nothing was published."
           exit 1
         fi
-        # Tokenize $ANACONDA_UPLOAD_ARGS into an array using xargs for quote-aware splitting.
-        anaconda_upload_args_array=()
-        if [ -n "$ANACONDA_UPLOAD_ARGS" ]; then
-          while IFS= read -r -d '' t; do anaconda_upload_args_array+=("$t"); done \
-            < <(printf '%s' "$ANACONDA_UPLOAD_ARGS" | xargs printf '%s\0')
-        fi
         failed=0
         paths=()
         for package_path in "${package_paths[@]}"; do
-          echo "anaconda upload --user $ANACONDA_USER $force --label $label ${anaconda_upload_args_array[*]+"${anaconda_upload_args_array[*]}"} $package_path"
-          if anaconda upload --user "$ANACONDA_USER" $force --label "$label" "${anaconda_upload_args_array[@]}" "$package_path"; then
+          echo "anaconda upload --user $ANACONDA_USER $force --label $label $ANACONDA_UPLOAD_ARGS $package_path"
+          if anaconda upload --user "$ANACONDA_USER" ${force_args[@]+"${force_args[@]}"} --label "$label" ${upload_args[@]+"${upload_args[@]}"} "$package_path"; then
             paths+=("$package_path")
           else
             echo "::error::Upload failed for $(basename "$package_path")"
@@ -438,8 +441,8 @@ runs:
           --job-key "$SUBJECT_JOB_KEY" \
           "${matrix_arguments[@]}" \
           --output "$output"
-        safe_output=$(printf '%s' "$output" | tr -d '\n\r')
-        safe_artifact_name=$(printf '%s' "$artifact_name" | tr -d '\n\r')
+        safe_output="$(printf '%s' "$output" | tr -d '\n\r')"
+        safe_artifact_name="$(printf '%s' "$artifact_name" | tr -d '\n\r')"
         echo "path=$safe_output" >> "$GITHUB_OUTPUT"
         echo "artifact_name=$safe_artifact_name" >> "$GITHUB_OUTPUT"
     - name: Create GitHub Release
